@@ -18,7 +18,7 @@
 //! - the connection is `!Sync` and never shared: every mutating operation runs
 //!   inside a private transaction, so PR 3 can wrap this adapter in a `Mutex`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::types::ToSql;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
@@ -68,19 +68,31 @@ pub struct VaultMetadata {
 /// `Sync`; the Tauri command layer (PR 3) will guard it with a `Mutex`.
 pub struct SqliteVaultRepository {
     conn: Connection,
+    /// The database file this repository was opened from, when file-backed.
+    /// In-memory repositories have no file and cannot be exported.
+    path: Option<PathBuf>,
 }
 
 impl SqliteVaultRepository {
     /// Open (creating if needed) the vault database at `path`, applying
     /// migrations. The parent directory must exist.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, RepositoryError> {
-        let conn = Connection::open(path).map_err(store_err)?;
-        Self::from_conn(conn)
+        let path = path.as_ref().to_path_buf();
+        let conn = Connection::open(&path).map_err(store_err)?;
+        let repo = Self::from_conn(conn)?;
+        Ok(Self {
+            conn: repo.conn,
+            path: Some(path),
+        })
     }
 
     /// Open an ephemeral in-memory vault (used by tests).
     pub fn open_in_memory() -> Result<Self, RepositoryError> {
-        Self::from_conn(Connection::open_in_memory().map_err(store_err)?)
+        let repo = Self::from_conn(Connection::open_in_memory().map_err(store_err)?)?;
+        Ok(Self {
+            conn: repo.conn,
+            path: None,
+        })
     }
 
     fn from_conn(conn: Connection) -> Result<Self, RepositoryError> {
@@ -89,7 +101,7 @@ impl SqliteVaultRepository {
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;")
             .map_err(store_err)?;
         migrate(&conn)?;
-        Ok(Self { conn })
+        Ok(Self { conn, path: None })
     }
 
     /// Store (or replace) the vault initialization metadata: a random salt and
@@ -147,6 +159,22 @@ impl SqliteVaultRepository {
     /// True once [`SqliteVaultRepository::init_vault`] has been called.
     pub fn is_initialized(&self) -> Result<bool, RepositoryError> {
         Ok(self.vault_metadata()?.is_some())
+    }
+
+    /// The database file this repository was opened from, or `None` for
+    /// in-memory repositories (which cannot be exported to a native backup).
+    pub fn db_path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    /// Force a WAL checkpoint so every committed transaction is present in the
+    /// main database file. Required before copying the file as a backup:
+    /// without it, recent writes could still live only in the `-wal` file.
+    pub fn checkpoint(&self) -> Result<(), RepositoryError> {
+        self.conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+            .map_err(store_err)?;
+        Ok(())
     }
 
     fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<EntryRecord> {
