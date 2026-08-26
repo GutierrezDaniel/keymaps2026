@@ -249,6 +249,20 @@ impl VaultRepository for SqliteVaultRepository {
             .map_err(store_err)
     }
 
+    fn list_emails(&self) -> Result<Vec<String>, RepositoryError> {
+        // DISTINCT collapses entries sharing an email; empty strings (an
+        // optional field) are excluded; ORDER BY yields ascending (BINARY)
+        // collation. Feeds the email filter selector, which must stay complete
+        // even while a filter shrinks the loaded entry list.
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT email FROM entries WHERE email <> '' ORDER BY email")
+            .map_err(store_err)?;
+        let rows = stmt.query_map([], |r| r.get(0)).map_err(store_err)?;
+        rows.collect::<rusqlite::Result<Vec<String>>>()
+            .map_err(store_err)
+    }
+
     fn save(&self, entry: &EntryRecord) -> Result<(), RepositoryError> {
         let tx = self.conn.unchecked_transaction().map_err(store_err)?;
         tx.execute(

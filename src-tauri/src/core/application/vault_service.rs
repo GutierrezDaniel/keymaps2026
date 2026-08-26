@@ -210,6 +210,18 @@ mod tests {
             Ok(())
         }
 
+        fn list_emails(&self) -> Result<Vec<String>, RepositoryError> {
+            let records = self.records.lock().unwrap();
+            let mut emails: Vec<String> = records
+                .iter()
+                .map(|e| e.email.clone())
+                .filter(|e| !e.is_empty())
+                .collect();
+            emails.sort();
+            emails.dedup();
+            Ok(emails)
+        }
+
         fn delete(&self, id: &RecordId) -> Result<(), RepositoryError> {
             let mut records = self.records.lock().unwrap();
             let before = records.len();
