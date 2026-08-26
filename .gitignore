@@ -145,3 +145,6 @@ vite.config.ts.timestamp-*
 # Rust / Tauri build artifacts
 /src-tauri/target/
 *.rs.bk
+
+# Local tooling (skill registry with absolute local paths) — never commit
+.atl/
