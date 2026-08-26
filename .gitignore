@@ -146,5 +146,16 @@ vite.config.ts.timestamp-*
 /src-tauri/target/
 *.rs.bk
 
+# Vault database and backups — never commit password-manager data.
+# The runtime vault lives in the app data dir (~/.local/share/dev.keymaps2026.app/),
+# outside the repo; these entries guard against a dev/test vault or an exported
+# backup being dropped into the tree. SQLite WAL mode adds -wal/-shm sidecars.
+vault.db
+vault.db-wal
+vault.db-shm
+vault.db-journal
+*.backup.db
+backup*.db
+
 # Local tooling (skill registry with absolute local paths) — never commit
 .atl/
