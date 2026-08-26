@@ -1,0 +1,467 @@
+/* Scoped CSS for the password manager UI (design: "React with scoped/plain CSS
+   and CSS variables"). Component-scoped by class names; no global reset beyond
+   the app shell. */
+
+:root {
+  --bg: #10141c;
+  --surface: #1a2130;
+  --surface-raised: #232c40;
+  --border: #33405c;
+  --text: #e8ecf4;
+  --text-muted: #9aa7bf;
+  --accent: #4f8cff;
+  --accent-hover: #6ea0ff;
+  --danger: #e5534b;
+  --warning-bg: #3a2a14;
+  --warning-border: #c7902f;
+  --warning-text: #ffd479;
+  --ok: #57ab5a;
+  --radius: 10px;
+  --shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.5;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+input,
+select {
+  font: inherit;
+}
+
+/* ------------------------------------------------------------------ */
+/* App shell                                                           */
+/* ------------------------------------------------------------------ */
+
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 2rem 1rem;
+}
+
+.app-title {
+  font-size: 1.4rem;
+  margin: 0 0 1.5rem;
+  letter-spacing: 0.02em;
+}
+
+/* ------------------------------------------------------------------ */
+/* Warning (irreversible loss) — prominent by design                   */
+/* ------------------------------------------------------------------ */
+
+.warning {
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  color: var(--warning-text);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+  font-weight: 600;
+  margin: 0 0 1.25rem;
+  max-width: 32rem;
+}
+
+.warning strong {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 1.05em;
+}
+
+/* ------------------------------------------------------------------ */
+/* Screens (login / create)                                            */
+/* ------------------------------------------------------------------ */
+
+.screen {
+  width: 100%;
+  max-width: 26rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.75rem;
+}
+
+.screen h2 {
+  margin: 0 0 1rem;
+  font-size: 1.2rem;
+}
+
+.screen form label {
+  display: block;
+  margin-bottom: 0.75rem;
+  font-weight: 600;
+}
+
+.screen form input {
+  display: block;
+  width: 100%;
+  margin-top: 0.3rem;
+  padding: 0.55rem 0.7rem;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.screen form input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.screen form input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.primary-button {
+  width: 100%;
+  margin-top: 0.75rem;
+  padding: 0.6rem;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.primary-button:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.primary-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.field-error {
+  color: var(--danger);
+  font-size: 0.9rem;
+  margin: -0.35rem 0 0.75rem;
+}
+
+.backoff {
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  color: var(--warning-text);
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+  margin: 0.75rem 0 0;
+  font-weight: 600;
+}
+
+.notice {
+  color: var(--ok);
+  font-weight: 600;
+  margin: 0 0 0.75rem;
+}
+
+.error-banner {
+  color: var(--danger);
+  font-weight: 600;
+  margin: 0 0 0.75rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Vault header + filters                                              */
+/* ------------------------------------------------------------------ */
+
+.vault-header {
+  width: 100%;
+  max-width: 60rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.vault-header h1 {
+  font-size: 1.3rem;
+  margin: 0;
+}
+
+.vault-header .primary-button {
+  width: auto;
+  margin: 0;
+  padding: 0.5rem 0.9rem;
+}
+
+.action-button {
+  padding: 0.4rem 0.8rem;
+  background: var(--surface-raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.action-button:hover {
+  border-color: var(--accent);
+}
+
+.action-button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.action-button.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.action-button.danger:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+.filters {
+  width: 100%;
+  max-width: 60rem;
+  display: flex;
+  gap: 0.6rem;
+  margin-bottom: 1.25rem;
+}
+
+.filter-input {
+  flex: 1;
+  padding: 0.5rem 0.7rem;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.empty-state {
+  color: var(--text-muted);
+  padding: 2rem 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Card grid + flip                                                    */
+/* ------------------------------------------------------------------ */
+
+.card-grid {
+  width: 100%;
+  max-width: 60rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  gap: 1rem;
+}
+
+.entry-card {
+  perspective: 1000px;
+  height: 15rem;
+}
+
+.card-inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+  transition: transform 0.45s;
+}
+
+.entry-card.flipped .card-inner {
+  transform: rotateY(180deg);
+}
+
+.card-face {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.card-back {
+  transform: rotateY(180deg);
+}
+
+.card-site {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+}
+
+.category-badge {
+  align-self: flex-start;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 0.1rem 0.6rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.6rem;
+}
+
+.card-link,
+.card-email {
+  margin: 0 0 0.3rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  word-break: break-all;
+}
+
+.flip-button {
+  margin-top: auto;
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--accent);
+  padding: 0;
+  font-weight: 600;
+}
+
+.entry-fields {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: 6.5rem 1fr;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.field-row dt {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.field-row dd {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  word-break: break-all;
+}
+
+.password-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.password-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  color: var(--accent);
+  padding: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.copy-button {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.8rem;
+}
+
+.copy-button:hover {
+  border-color: var(--accent);
+}
+
+.card-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: auto;
+  padding-top: 0.6rem;
+}
+
+.card-actions .flip-button {
+  margin-top: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Modals (form + delete confirmation)                                 */
+/* ------------------------------------------------------------------ */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.modal {
+  width: 100%;
+  max-width: 24rem;
+  max-height: 90vh;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.5rem;
+}
+
+.modal h2 {
+  margin: 0 0 1rem;
+  font-size: 1.15rem;
+}
+
+.modal label {
+  display: block;
+  margin-bottom: 0.7rem;
+  font-weight: 600;
+}
+
+.modal input,
+.modal select {
+  display: block;
+  width: 100%;
+  margin-top: 0.25rem;
+  padding: 0.5rem 0.65rem;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.modal input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
