@@ -168,6 +168,7 @@ function LoginScreen({ error, notice, backoff, onExpireBackoff, onUnlock }: Logi
 export default function App() {
   const [phase, setPhase] = useState<Phase>("booting");
   const [entries, setEntries] = useState<EntrySummary[]>([]);
+  const [emails, setEmails] = useState<string[]>([]);
   const [filters, setFilters] = useState<Filters>({});
   const [details, setDetails] = useState<Record<string, EntryDetails>>({});
   const [flipped, setFlipped] = useState<Record<string, boolean>>({});
@@ -185,12 +186,29 @@ export default function App() {
   function lockScreen() {
     setPhase("locked");
     setEntries([]);
+    setEmails([]);
     setDetails({});
     setFlipped({});
     setEditing(null);
     setDeleting(null);
     setFormOpen(false);
     setNotice(null);
+  }
+
+  /** Refresh the email selector options from the repository. The complete
+   *  distinct set must come from the backend: the loaded entry list can be
+   *  shrunk by an active filter, so deriving emails from it would be partial. */
+  async function loadEmails(): Promise<void> {
+    try {
+      setEmails(await api.listEmails());
+    } catch (raw) {
+      const commandError = toCommandError(raw);
+      if (commandError.kind === "Locked") {
+        lockScreen();
+      } else {
+        setError(spanishMessage(commandError));
+      }
+    }
   }
 
   /** Refresh the entry list with the given filters. */
@@ -201,6 +219,7 @@ export default function App() {
       setDetails({});
       setFlipped({});
       setPhase("unlocked");
+      void loadEmails();
     } catch (raw) {
       const commandError = toCommandError(raw);
       if (commandError.kind === "Locked") {
@@ -217,10 +236,11 @@ export default function App() {
     let cancelled = false;
     api
       .list(null)
-      .then((list) => {
+      .then(async (list) => {
         if (cancelled) return;
         setEntries(list);
         setPhase("unlocked");
+        void loadEmails();
       })
       .catch((raw) => {
         if (cancelled) return;
@@ -439,7 +459,7 @@ export default function App() {
       )}
       {notice && <p className="notice">{notice}</p>}
 
-      <SearchFilters filters={filters} onChange={handleFiltersChange} />
+      <SearchFilters filters={filters} emails={emails} onChange={handleFiltersChange} />
 
       {entries.length === 0 ? (
         <p className="empty-state">

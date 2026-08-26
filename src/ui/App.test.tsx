@@ -26,10 +26,13 @@ const ENTRY: EntrySummary = {
 
 const DETAILS: EntryDetails = { summary: ENTRY, password: "s3cr3t" };
 
-/** Route mocked invoke by command name. Handlers throw to reject. */
+/** Route mocked invoke by command name. Handlers throw to reject. An unlisted
+ *  `list_emails` route resolves to an empty list: the App loads the email
+ *  selector on every boot and refresh, and unrelated tests don't care. */
 function mockRoutes(routes: Record<string, (args?: unknown) => unknown>) {
   mockedInvoke.mockImplementation((command: string, args?: unknown) => {
-    const handler = routes[command];
+    const handler =
+      routes[command] ?? (command === "list_emails" ? () => [] : undefined);
     if (!handler) return Promise.reject(new Error(`No mock registered for ${command}`));
     try {
       return Promise.resolve(handler(args));
@@ -357,6 +360,45 @@ describe("App — unlocked vault interactions", () => {
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Formulario de entrada" })).toBeNull(),
     );
+  });
+
+  it("loads the distinct emails into the email filter when unlocked", async () => {
+    mockRoutes({
+      list: () => [ENTRY],
+      list_emails: () => ["ana@example.com", "bob@example.com"],
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    expect(mockedInvoke).toHaveBeenCalledWith("list_emails");
+    expect(screen.getByRole("option", { name: "Todos los correos" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "ana@example.com" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "bob@example.com" })).toBeTruthy();
+  });
+
+  it("filters the vault list when an email is selected in the filter", async () => {
+    mockRoutes({
+      list: (args) => {
+        const filters = (args as { filters?: { email?: string | null } } | undefined)
+          ?.filters;
+        if (filters?.email) return [];
+        return [ENTRY];
+      },
+      list_emails: () => ["ana@example.com"],
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    fireEvent.change(screen.getByLabelText("Filtrar por correo"), {
+      target: { value: "ana@example.com" },
+    });
+
+    expect(mockedInvoke).toHaveBeenCalledWith("list", {
+      filters: { email: "ana@example.com" },
+    });
+    expect(
+      await screen.findByText(/No hay entradas que coincidan con la búsqueda/),
+    ).toBeTruthy();
   });
 
   it("returns to the locked screen when a command reports the vault auto-locked", async () => {

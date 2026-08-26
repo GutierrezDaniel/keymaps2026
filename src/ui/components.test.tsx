@@ -137,15 +137,38 @@ describe("EntryFormModal — Spanish validation", () => {
   });
 });
 
-describe("SearchFilters — site and email filter normalization", () => {
-  it("sends the typed site and email values as filters", () => {
+describe("SearchFilters — site search and email/category selects", () => {
+  it("sends the typed site value as a filter", () => {
     const onChange = vi.fn();
-    render(<SearchFilters filters={{}} onChange={onChange} />);
+    render(<SearchFilters filters={{}} emails={[]} onChange={onChange} />);
 
     fireEvent.change(screen.getByLabelText("Buscar por sitio"), {
       target: { value: "GitHub" },
     });
     expect(onChange).toHaveBeenLastCalledWith({ site: "GitHub" });
+  });
+
+  it("renders the email select with every provided email and the all-emails option", () => {
+    render(
+      <SearchFilters
+        filters={{}}
+        emails={["ana@example.com", "bob@example.com"]}
+        onChange={() => undefined}
+      />,
+    );
+
+    const emailSelect = screen.getByLabelText("Filtrar por correo") as HTMLSelectElement;
+    expect(emailSelect.tagName).toBe("SELECT");
+    expect(screen.getByRole("option", { name: "Todos los correos" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "ana@example.com" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "bob@example.com" })).toBeTruthy();
+  });
+
+  it("emits the selected email as a filter", () => {
+    const onChange = vi.fn();
+    render(
+      <SearchFilters filters={{}} emails={["ana@example.com"]} onChange={onChange} />,
+    );
 
     fireEvent.change(screen.getByLabelText("Filtrar por correo"), {
       target: { value: "ana@example.com" },
@@ -153,16 +176,19 @@ describe("SearchFilters — site and email filter normalization", () => {
     expect(onChange).toHaveBeenLastCalledWith({ email: "ana@example.com" });
   });
 
-  it("sends null instead of an empty string when the email filter is cleared", () => {
+  it("emits null for the email filter when Todos los correos is selected", () => {
     const onChange = vi.fn();
     render(
       <SearchFilters
         filters={{ site: "GitHub", email: "ana@example.com" }}
+        emails={["ana@example.com"]}
         onChange={onChange}
       />,
     );
 
-    fireEvent.change(screen.getByLabelText("Filtrar por correo"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Filtrar por correo"), {
+      target: { value: "" },
+    });
     expect(onChange).toHaveBeenCalledWith({ site: "GitHub", email: null });
   });
 
@@ -171,6 +197,7 @@ describe("SearchFilters — site and email filter normalization", () => {
     render(
       <SearchFilters
         filters={{ site: "GitHub", email: "ana@example.com" }}
+        emails={["ana@example.com"]}
         onChange={onChange}
       />,
     );
