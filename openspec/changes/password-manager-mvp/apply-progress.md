@@ -1,10 +1,10 @@
-# Apply Progress — Password Manager MVP (PR 1 + PR 2 + PR 3 / Units 1–3)
+# Apply Progress — Password Manager MVP (PR 1 + PR 2 + PR 3 + PR 4 / Units 1–4)
 
 **Change**: password-manager-mvp
-**PR**: 1 (Unit 1) + 2 (Unit 2) + 3 (Unit 3)
+**PR**: 1 (Unit 1) + 2 (Unit 2) + 3 (Unit 3) + 4 (Unit 4)
 **Mode**: Standard (strict_tdd: false — greenfield)
-**Dates**: 2026-08-26 (PR 1), 2026-08-26 (PR 2), 2026-08-26 (PR 3)
-**Status**: Phases 1 (1.1–1.7), 2 (2.1–2.3), and 3 (3.1–3.5) COMPLETE — `cargo test --lib` green (42 passed, 0 failed); `cargo test --test vault_repo` green (8 passed, 0 failed); `cargo build --features tauri-app` compiles.
+**Dates**: 2026-08-26 (PR 1), 2026-08-26 (PR 2), 2026-08-26 (PR 3), 2026-08-26 (PR 4)
+**Status**: Phases 1 (1.1–1.7), 2 (2.1–2.3), 3 (3.1–3.5), and 4 (4.1–4.4) COMPLETE — `cargo test --lib` green (42 passed); `cargo test --test vault_repo` green (8 passed); `cargo build --features tauri-app` compiles; `npm test -- --run` green (43 passed); `npm run build` clean. Remaining: Phase 5 (E2E + docs).
 
 ## Completed Tasks (PR 1 — 1.1–1.7)
 
@@ -75,3 +75,70 @@
 - Work unit: Unit 3 — session, clipboard, backup, Tauri commands.
 - Boundary: `adapters/{clipboard,backup,tauri}.rs`, `sqlite.rs` path/checkpoint additions, shell registration (desktop.rs/main.rs), Cargo.toml serde wiring. Deliberately excludes the React UI (PR 4) and E2E/docs (PR 5).
 - Review budget impact: 1,611 authored additions + 14 deletions (above the 400-line comfort zone, but one cohesive work unit exactly as forecast in tasks.md Unit 3: commands + session + two adapters + their tests; the orchestrator resolved the chain strategy — stacked-to-main — and assigned this slice explicitly).
+
+# Apply Progress — Password Manager MVP (PR 4 / Unit 4)
+
+**Change**: password-manager-mvp
+**PR**: 4 (Unit 4) — LAST implementation PR of the chain (stacked-to-main, 4 of 4)
+**Mode**: Standard (strict_tdd: false — greenfield, per openspec/config.yaml)
+**Date**: 2026-08-26
+**Status**: Phase 4 (4.1–4.4) COMPLETE — `npm test -- --run` green (43 passed, 0 failed); `npm run build` (tsc && vite build) clean; `cargo test --lib` (42) and `cargo test --test vault_repo` (8) still green (backend untouched).
+
+## Completed Tasks (PR 4 — 4.1–4.4)
+
+| Task | Status | Evidence |
+|---|---|---|
+| 4.1 `src/ui/App.tsx` — login/locked screens with Spanish irreversible-loss warnings | ✅ | Screen state machine `booting → create \| locked → unlocked`. Create screen: prominent Spanish irreversible-loss warning before master-password confirmation ("Advertencia: pérdida irreversible… no existe ningún mecanismo de recuperación"). Locked screen: same-class permanent-loss warning + login + backoff countdown. `create_vault` success → returns to the LOGIN screen (PR 3 contract: create does NOT auto-unlock). `VaultNotInitialized` (surfaced by `unlock`) switches locked → create. Auto-lock (Rust 5-min) surfaces lazily: any command rejecting `Locked` clears entries/details and shows the locked screen. `record_activity` implicit — every command touches the session in Rust. |
+| 4.2 `src/ui/components.tsx` — card flip, masked password reveal/hide, form modal, delete confirm, search/filters | ✅ | `EntryCard` 3D CSS flip; back shows all six fields with Spanish labels (Sitio/Enlace/Contraseña/Correo/Usuario/Categoría); copy controls ONLY for link/password/email/username — never category (vault-ui "Non-copyable category"). `MaskedPassword` masked by default, Mostrar/Ocultar toggle, bullets never leak short-password length. `EntryFormModal` Spanish validation (El sitio es obligatorio / La contraseña es obligatoria), stays open on invalid submit. `DeleteConfirm` Spanish alertdialog ("¿Eliminar la entrada «X»?", "Esta acción no se puede deshacer."). `SearchFilters` site/category/email conjunctive. `BackoffNotice` Spanish countdown ticking to 0. `CopyButton` transient "Copiado" feedback with cleanup. |
+| 4.3 `src/ui/api.tsx` + `src/ui/styles.css` — typed IPC client, scoped CSS | ✅ | Typed client covers ALL 11 Tauri commands with exact serde shapes: snake_case `master_password` inside `req`, snake_case `CopyField` variants, camelCase arg keys (single-word args → identity), `list` filters nullable. `toCommandError` normalizes Tauri rejections (unit-variant strings "Locked", externally tagged { Backoff: { seconds } }, { Store: msg }) into a typed `CommandError` kind. `CATEGORIES` const array → `Category` union type (TS skill const-types pattern). Scoped CSS with CSS variables (design decision: no Tailwind/UI kit), `.warning` prominent styling. Styles imported by components.tsx. |
+| 4.4 Component tests (vault-ui) | ✅ | 43 tests across `api.test.tsx` (16 — command names/args + error normalization), `components.test.tsx` (13 — Spanish labels, flip fields, masking reveal/hide, no category copy control, invalid form, delete confirm, backoff countdown), `App.test.tsx` (14 — boot resolution, warnings, create-does-not-auto-unlock, mismatched passwords, backoff surfaced + submit disabled, explicit lock, auto-lock surfacing, flip details, copy, delete refresh, form save). `@tauri-apps/api/core` mocked via `vi.mock`; all headless in jsdom. |
+
+## Test Results
+
+- `npm test -- --run` (repo root): **43 passed, 0 failed** — 16 (api) + 13 (components) + 14 (App).
+- `npm run build` (tsc && vite build): **clean** — type-checks all of `src/` including tests; Vite bundle 157.27 kB JS / 5.94 kB CSS (dist/).
+- `cargo test --lib` (from `src-tauri/`): **42 passed, 0 failed** — untouched.
+- `cargo test --test vault_repo` (from `src-tauri/`): **8 passed, 0 failed** — untouched.
+
+## Work Unit Evidence
+
+| Evidence | Required value |
+|---|---|
+| Focused test command + result | `npm test -- --run` → `Test Files 3 passed (3); Tests 43 passed (43)`. Per unit: `npx vitest run src/ui/api.test.tsx` → 16 passed; `src/ui/components.test.tsx` → 13 passed; `src/ui/App.test.tsx` → 14 passed. `npm run build` → tsc clean + vite build success. |
+| Runtime harness | `N/A` for this PR — the Tauri IPC is mocked headless in jsdom by design; running the real webview needs a desktop session and is the Phase 5 E2E task (5.1 `npm run tauri dev`). The full command surface is exercised against the mocked transport (exact command names/args asserted) and the Rust command layer is already proven by PR 3's 20 headless tests. |
+| Rollback boundary | Delete `src/ui/{App,api,components}.tsx`, `src/ui/{App,api,components}.test.tsx`, `src/ui/test/setup.ts`, `src/ui/styles.css`; revert `main.tsx` and `vite.config.ts` setupFiles line; drop commits `4dba791`/`45bd376`/`7ec78f6`/`4708284`. No Phase 1–3 file touched (verified: only `src/ui/` + `vite.config.ts` + openspec artifacts in the diff). |
+
+## Commits (work-unit per commit, conventional, no AI attribution)
+
+| Commit | Unit |
+|---|---|
+| `4dba791 chore(test): add vitest jsdom setup with minimal polyfills` | test infra: setup.ts + vite.config.ts setupFiles |
+| `45bd376 feat(ui): add typed Tauri IPC client for vault commands` | api.tsx + api.test.tsx (16 tests) |
+| `7ec78f6 feat(ui): add Spanish card, form and confirmation components` | components.tsx + styles.css + components.test.tsx (13 tests) |
+| `4708284 feat(ui): wire Spanish login, locked and vault screens` | App.tsx + main.tsx + App.test.tsx (14 tests) |
+
+## Deviations from Design
+
+- **No export UI button.** The typed client includes `api.export(path)` (contract type-checks against `export` command), but no toolbar button was added: choosing a destination requires the Tauri dialog plugin, which is not a dependency on either side (adding it would be a backend/plugin change, out of PR 4 scope). The spec's UI file list ("Login, cards/flip, form modal, filters, confirmations, and Spanish warnings") does not require an export control; export remains fully available through the command surface.
+- **Boot screen detection is via `list` + `unlock`, not a dedicated command.** A fresh vault reports `Locked` from `list` (no session exists), so the UI boots to the login screen and only switches to the create screen when `unlock` rejects `VaultNotInitialized`. There is no `is_initialized` command on the wire; this flow matches the existing 11-command surface without backend changes.
+- **Auto-lock is surfaced lazily, not polled.** The UI does not poll `list` while unlocked because every command touches the session clock in Rust — polling would keep the session alive and defeat the 5-minute auto-lock. Instead, the first command after a Rust-side auto-lock rejects `Locked` and the App returns to the locked screen (clearing any cached details). E2E observation of the idle timeout remains Phase 5.
+- **`CopyButton` feedback timer** (1.5 s "Copiado") is frontend-only transient UI; the 20 s clipboard clear is Rust-owned and unaffected.
+
+## Issues Found
+
+- None blocking. Two test-rig gotchas resolved: (1) `vi.advanceTimersByTime` must be wrapped in `act()` for React 18 state updates (BackoffNotice countdown); (2) both card faces render in the DOM (CSS hides one), so text queries must be scoped to `.card-front`/`.card-back` to avoid duplicate matches.
+
+## Remaining Tasks (later PRs)
+
+- Phase 5 (PR 5 / final): E2E + docs — 5.1–5.2 (not part of this PR; implementation chain is now complete).
+
+## PR Boundary
+
+- Mode: chained PR slice (stacked-to-main), PR 4 of 4 — last implementation PR.
+- Work unit: Unit 4 — Spanish React UI + component tests.
+- Boundary: `src/ui/` (App, api, components, styles, main, tests, test/setup), `vite.config.ts` (setupFiles only). Deliberately excludes Phase 5 E2E/docs and all backend files.
+- Review budget impact: 2,317 authored additions + 9 deletions across 12 files (above the 400-line comfort zone — but the forecast's Unit 4 anticipated this; four work-unit commits keep each review slice focused; the orchestrator resolved stacked-to-main and assigned this final slice explicitly).
+
+## Cumulative State (all PRs)
+
+- PR 1 (1.1–1.7): ✅ PR 2 (2.1–2.3): ✅ PR 3 (3.1–3.5): ✅ PR 4 (4.1–4.4): ✅ — Phases 1–4 complete. Remaining: Phase 5 (5.1 E2E, 5.2 docs/.gitignore).
