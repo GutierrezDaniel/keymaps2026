@@ -24,7 +24,7 @@ mechanism — losing it makes the vault permanently unrecoverable.**
 
 ```bash
 npm install
-npm run tauri dev
+npm run tauri:dev
 ```
 
 ## Test
@@ -38,7 +38,7 @@ cargo test --test vault_repo   # SQLite vault integration tests — run from src
 ## Build
 
 ```bash
-npm run tauri build
+npm run tauri:build
 ```
 
 ## Security notes

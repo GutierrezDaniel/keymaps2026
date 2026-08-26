@@ -52,7 +52,7 @@ tauri = { version = "2", optional = true, features = [] }
 tauri-build = { version = "2", optional = true }
 
 [build-dependencies]
-tauri-build = { version = "2", optional = true }
+tauri-build = { version = "2", optional = true , features = [] }
 
 [dev-dependencies]
 # Temporary databases for the vault-storage integration tests (task 2.3).
