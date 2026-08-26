@@ -465,6 +465,7 @@ export default function App() {
       )}
 
       <EntryFormModal
+        key={editing?.id ?? "new"}
         open={formOpen}
         initial={editing}
         initialPassword={editing ? (details[editing.id]?.password ?? "") : ""}

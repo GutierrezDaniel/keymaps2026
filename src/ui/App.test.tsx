@@ -305,6 +305,30 @@ describe("App — unlocked vault interactions", () => {
     expect(await screen.findByText(/Aún no hay entradas/)).toBeTruthy();
   });
 
+  it("pre-fills the edit form from the entry when editing", async () => {
+    mockRoutes({
+      list: () => [ENTRY],
+      get_entry_details: () => DETAILS,
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Ver detalles" }));
+    await screen.findByText("Contraseña");
+    fireEvent.click(screen.getByRole("button", { name: "Editar" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Formulario de entrada" });
+    expect(within(dialog).getByRole("heading", { name: "Editar entrada" })).toBeTruthy();
+    expect(within(dialog).getByLabelText(/Sitio/)).toHaveProperty("value", "GitHub");
+    expect(within(dialog).getByLabelText(/Enlace/)).toHaveProperty("value", "https://github.com");
+    expect(within(dialog).getByLabelText(/Correo/)).toHaveProperty("value", "ana@example.com");
+    expect(within(dialog).getByLabelText(/Usuario/)).toHaveProperty("value", "ana");
+    expect(within(dialog).getByLabelText(/Categoría/)).toHaveProperty("value", "trabajo");
+    // The card was flipped before editing, so the decrypted password also
+    // pre-fills (initialPassword flows from the cached details).
+    expect(within(dialog).getByLabelText(/Contraseña/)).toHaveProperty("value", "s3cr3t");
+  });
+
   it("saves a new entry from the form modal", async () => {
     mockRoutes({
       list: () => [ENTRY],

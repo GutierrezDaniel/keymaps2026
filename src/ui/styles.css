@@ -243,6 +243,10 @@ select {
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
+  /* WebKit/GTK (Tauri on Linux) ignores background-color on <select> with
+     the default appearance: auto, leaving a native white background. */
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 .empty-state {
@@ -453,6 +457,10 @@ select {
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
+  /* Same WebKit/GTK <select> fix as .filter-input so the themed background
+     actually renders. */
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 .modal input[aria-invalid="true"] {

@@ -358,7 +358,7 @@ export function SearchFilters({ filters, onChange }: SearchFiltersProps) {
         placeholder="Buscar por sitio…"
         aria-label="Buscar por sitio"
         value={filters.site ?? ""}
-        onChange={(event) => onChange({ ...filters, site: event.target.value })}
+        onChange={(event) => onChange({ ...filters, site: event.target.value || null })}
       />
       <select
         className="filter-input"
@@ -381,7 +381,7 @@ export function SearchFilters({ filters, onChange }: SearchFiltersProps) {
         placeholder="Filtrar por correo…"
         aria-label="Filtrar por correo"
         value={filters.email ?? ""}
-        onChange={(event) => onChange({ ...filters, email: event.target.value })}
+        onChange={(event) => onChange({ ...filters, email: event.target.value || null })}
       />
     </div>
   );

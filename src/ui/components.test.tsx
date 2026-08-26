@@ -11,6 +11,7 @@ import {
   DeleteConfirm,
   BackoffNotice,
   MaskedPassword,
+  SearchFilters,
 } from "./components";
 
 const SUMMARY: EntrySummary = {
@@ -133,6 +134,49 @@ describe("EntryFormModal — Spanish validation", () => {
       username: "ana",
       category: "estudio",
     });
+  });
+});
+
+describe("SearchFilters — site and email filter normalization", () => {
+  it("sends the typed site and email values as filters", () => {
+    const onChange = vi.fn();
+    render(<SearchFilters filters={{}} onChange={onChange} />);
+
+    fireEvent.change(screen.getByLabelText("Buscar por sitio"), {
+      target: { value: "GitHub" },
+    });
+    expect(onChange).toHaveBeenLastCalledWith({ site: "GitHub" });
+
+    fireEvent.change(screen.getByLabelText("Filtrar por correo"), {
+      target: { value: "ana@example.com" },
+    });
+    expect(onChange).toHaveBeenLastCalledWith({ email: "ana@example.com" });
+  });
+
+  it("sends null instead of an empty string when the email filter is cleared", () => {
+    const onChange = vi.fn();
+    render(
+      <SearchFilters
+        filters={{ site: "GitHub", email: "ana@example.com" }}
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Filtrar por correo"), { target: { value: "" } });
+    expect(onChange).toHaveBeenCalledWith({ site: "GitHub", email: null });
+  });
+
+  it("sends null instead of an empty string when the site filter is cleared", () => {
+    const onChange = vi.fn();
+    render(
+      <SearchFilters
+        filters={{ site: "GitHub", email: "ana@example.com" }}
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Buscar por sitio"), { target: { value: "" } });
+    expect(onChange).toHaveBeenCalledWith({ site: null, email: "ana@example.com" });
   });
 });
 
