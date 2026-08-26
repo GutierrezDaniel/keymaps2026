@@ -595,7 +595,7 @@ use tauri::Manager;
 /// Wire the application state and all typed commands into the Tauri builder,
 /// and start the background auto-lock thread.
 #[cfg(feature = "tauri-app")]
-pub fn build(builder: tauri::Builder) -> tauri::Builder {
+pub fn build(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     builder
         .setup(|app| {
             // The vault database lives in the platform app-data directory.
