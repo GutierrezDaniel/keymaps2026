@@ -32,11 +32,14 @@ argon2 = "0.5"
 aes-gcm = "0.10"
 rand = "0.8"
 zeroize = "1"
-secrecy = "0.8"
+# `serde` lets the Tauri DTOs carry SecretString values across IPC (the
+# serialized form is the plaintext the frontend needs; Debug stays masked).
+secrecy = { version = "0.8", features = ["serde"] }
 
 # Encoding / errors
 hex = "0.4"
 thiserror = "2"
+serde = { version = "1", features = ["derive"] }
 
 # Persistence (declared now for the scaffold; adapter lands in Phase 2)
 rusqlite = { version = "0.31", features = ["bundled"] }
