@@ -45,11 +45,11 @@ Threat matrix: all N/A — no RED-test tasks.
 
 ## Phase 3: Session, Backup, Commands
 
-- [ ] 3.1 Create `src-tauri/src/adapters/clipboard.rs` — 20s conditional clear (arboard)
-- [ ] 3.2 Create `src-tauri/src/adapters/backup.rs` — encrypted export, refuse locked/failed, no partial file
-- [ ] 3.3 Create `src-tauri/src/adapters/tauri.rs` — 10 typed commands, `Arc<Mutex<Option<Session>>>`, 5-min auto-lock, backoff 1,2,4,8,16s cap 60s
-- [ ] 3.4 Register commands/state in `src-tauri/src/main.rs`
-- [ ] 3.5 Unit tests: backoff/cap/reset, lock zeroizes secrets, export refusal/atomicity (vault-session, vault-backup)
+- [x] 3.1 Create `src-tauri/src/adapters/clipboard.rs` — 20s conditional clear (arboard)
+- [x] 3.2 Create `src-tauri/src/adapters/backup.rs` — encrypted export, refuse locked/failed, no partial file
+- [x] 3.3 Create `src-tauri/src/adapters/tauri.rs` — 10 typed commands, `Arc<Mutex<Option<Session>>>`, 5-min auto-lock, backoff 1,2,4,8,16s cap 60s
+- [x] 3.4 Register commands/state in `src-tauri/src/main.rs`
+- [x] 3.5 Unit tests: backoff/cap/reset, lock zeroizes secrets, export refusal/atomicity (vault-session, vault-backup)
 
 ## Phase 4: UI
 
