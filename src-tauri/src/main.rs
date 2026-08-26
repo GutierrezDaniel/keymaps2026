@@ -5,8 +5,9 @@
 //! that headless builds (`cargo test --lib`) never require the webkit2gtk-4.1 /
 //! gtk3 system libraries.
 //!
-//! Command registration and `Arc<Mutex<Option<Session>>>` state wiring land in
-//! Phase 3; PR 1 ships a bootstrappable shell only.
+//! State management and command registration (Phase 3) live in
+//! [`desktop::run`], which boots the Tauri builder with the `VaultApp` state
+//! and the typed commands from `adapters::tauri`.
 
 #[cfg(feature = "tauri-app")]
 fn main() {
