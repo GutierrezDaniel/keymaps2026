@@ -51,6 +51,10 @@ tauri-build = { version = "2", optional = true }
 [build-dependencies]
 tauri-build = { version = "2", optional = true }
 
+[dev-dependencies]
+# Temporary databases for the vault-storage integration tests (task 2.3).
+tempfile = "3"
+
 [profile.release]
 # Tauri recommends LTO and codegen-units=1 for release builds.
 codegen-units = 1
