@@ -47,7 +47,7 @@ Threat matrix: all N/A — no RED-test tasks.
 
 - [x] 3.1 Create `src-tauri/src/adapters/clipboard.rs` — 20s conditional clear (arboard)
 - [x] 3.2 Create `src-tauri/src/adapters/backup.rs` — encrypted export, refuse locked/failed, no partial file
-- [x] 3.3 Create `src-tauri/src/adapters/tauri.rs` — 10 typed commands, `Arc<Mutex<Option<Session>>>`, 5-min auto-lock, backoff 1,2,4,8,16s cap 60s
+- [x] 3.3 Create `src-tauri/src/adapters/tauri.rs` — 12 typed commands (create_vault, unlock, lock, list, list_emails, get_entry_details, create, update, delete, export, copy_field, record_activity), `Arc<Mutex<Option<Session>>>`, 5-min auto-lock, backoff 1,2,4,8,16s cap 60s
 - [x] 3.4 Register commands/state in `src-tauri/src/main.rs`
 - [x] 3.5 Unit tests: backoff/cap/reset, lock zeroizes secrets, export refusal/atomicity (vault-session, vault-backup)
 
@@ -60,5 +60,5 @@ Threat matrix: all N/A — no RED-test tasks.
 
 ## Phase 5: Verification & Docs
 
-- [ ] 5.1 `npm run tauri dev` E2E: create→unlock→search→copy→auto-lock
+- [x] 5.1 `npm run tauri dev` E2E: create→unlock→search→copy→auto-lock
 - [x] 5.2 README + `.gitignore` (vault DB/backups), remove debug code

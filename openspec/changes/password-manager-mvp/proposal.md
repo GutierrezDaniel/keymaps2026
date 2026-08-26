@@ -61,6 +61,6 @@ Revert the feature branch and stop distribution. Preserve only encrypted exports
 
 ## Success Criteria
 
-- [ ] Users safely create, unlock, search, filter, copy, edit, and delete multiple entries.
+- [x] Users safely create, unlock, search, filter, copy, edit, and delete multiple entries.
 - [ ] Secrets stay encrypted at rest and in backups; the derived key never reaches the frontend.
 - [ ] Locking, clipboard clearing, masking, backoff, and Spanish risk warnings work as specified.

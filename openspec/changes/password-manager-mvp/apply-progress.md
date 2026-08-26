@@ -305,3 +305,9 @@ Deriving emails from the currently loaded `entries` would be incomplete whenever
 ## Cumulative State (all PRs + Phase 5)
 
 - PR 1–4, 5.2, E2E bug fixes, and this refinement all complete. Remaining: 5.1 (E2E with user, orchestrator), then verify + archive.
+
+# E2E validation + openspec sync — final Phase 5 note
+
+**Date**: 2026-08-26
+**Status**: Task 5.1 VALIDATED by the user on the real app (`npm run tauri:dev`): the three E2E bug fixes confirmed working and the email selector filter confirmed working. Openspec artifacts synced to the final state: `tasks.md` 5.1 → `[x]` and 3.3 → 12 commands; `design.md` Tauri-boundary decision → 12 commands (`create_vault`, `list_emails` added); `proposal.md` success criterion 1 → `[x]`; `vault-entries/spec.md` Search-and-filters requirement now specifies the distinct-email selector with a clear option and adds a scenario.
+**Next**: user's planned visual modifications → then `sdd-verify` → `sdd-archive`.

@@ -40,13 +40,19 @@ The system MUST support creating, reading, updating, and deleting entries by sta
 
 ### Requirement: Search and filters
 
-The system MUST support site-name search and filtering by category and email, and MUST combine active filters without exposing entries outside the result set.
+The system MUST support site-name search and filtering by category and email, and MUST combine active filters without exposing entries outside the result set. The email filter MUST be presented as a selection of the distinct email values stored in the vault, with an explicit option to clear the filter and show all entries.
 
 #### Scenario: Find a matching entry
 
 - GIVEN multiple entries with different sites, categories, and emails
 - WHEN a site search and category filter are applied
 - THEN only entries matching both criteria are listed
+
+#### Scenario: Email filter offers stored emails and can be cleared
+
+- GIVEN entries with stored email addresses and a distinct-email selector
+- WHEN the user picks one email and later selects the clear option
+- THEN the list narrows to entries with that email and then returns to all entries
 
 #### Scenario: No matching results
 
