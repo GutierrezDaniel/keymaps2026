@@ -1,4 +1,5 @@
 //! Infrastructure layer: concrete implementations of the hexagonal ports.
 
+pub mod clipboard;
 pub mod crypto;
 pub mod persistence;
