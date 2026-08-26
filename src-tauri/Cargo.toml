@@ -1,0 +1,58 @@
+[package]
+name = "keymaps2026"
+version = "0.1.0"
+description = "Personal password manager MVP (Tauri v2 + Rust hexagonal core)"
+authors = ["keymaps2026"]
+edition = "2021"
+license = "MIT"
+
+# Library crate holds the hexagonal core (domain / ports / application) and the
+# adapters. Keeping the logic in the lib target lets `cargo test --lib` exercise
+# the core + crypto without requiring a desktop display or GUI system libraries.
+[lib]
+name = "keymaps2026_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "keymaps2026"
+path = "src/main.rs"
+
+[features]
+default = []
+# Enables the Tauri v2 desktop shell (main.rs + build.rs). Gated behind this
+# feature because compiling the `tauri` crate on Linux requires the
+# webkit2gtk-4.1 / gtk3 / libsoup-3.0 system libraries, which are not present in
+# minimal/headless build environments. `cargo test --lib` runs with the default
+# (empty) feature set and therefore never pulls those system dependencies.
+tauri-app = ["dep:tauri", "dep:tauri-build"]
+
+[dependencies]
+# Crypto core
+argon2 = "0.5"
+aes-gcm = "0.10"
+rand = "0.8"
+zeroize = "1"
+secrecy = "0.8"
+
+# Encoding / errors
+hex = "0.4"
+thiserror = "2"
+
+# Persistence (declared now for the scaffold; adapter lands in Phase 2)
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Clipboard (declared now for the scaffold; adapter lands in Phase 3)
+arboard = "3.4"
+
+# Desktop shell (Phase 3 command registration). Gated — see the `tauri-app` feature.
+tauri = { version = "2", optional = true, features = [] }
+tauri-build = { version = "2", optional = true }
+
+[build-dependencies]
+tauri-build = { version = "2", optional = true }
+
+[profile.release]
+# Tauri recommends LTO and codegen-units=1 for release builds.
+codegen-units = 1
+lto = true
+strip = true
