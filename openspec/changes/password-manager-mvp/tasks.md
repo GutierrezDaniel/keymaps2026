@@ -39,9 +39,9 @@ Threat matrix: all N/A — no RED-test tasks.
 
 ## Phase 2: Persistence
 
-- [ ] 2.1 Create `src-tauri/src/adapters/persistence/sqlite.rs` — `vault_metadata` salt/validation + `entries` schema
-- [ ] 2.2 Implement CRUD, site search, category/email filters, record ID as AAD, atomic transactions
-- [ ] 2.3 Integration tests: CRUD/filters, duplicates, restart identity, ID mismatch (vault-storage)
+- [x] 2.1 Create `src-tauri/src/adapters/persistence/sqlite.rs` — `vault_metadata` salt/validation + `entries` schema
+- [x] 2.2 Implement CRUD, site search, category/email filters, record ID as AAD, atomic transactions
+- [x] 2.3 Integration tests: CRUD/filters, duplicates, restart identity, ID mismatch (vault-storage)
 
 ## Phase 3: Session, Backup, Commands
 
