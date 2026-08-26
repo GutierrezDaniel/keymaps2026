@@ -53,10 +53,10 @@ Threat matrix: all N/A — no RED-test tasks.
 
 ## Phase 4: UI
 
-- [ ] 4.1 Create `src/ui/App.tsx` — login/locked screens with Spanish irreversible-loss warnings
-- [ ] 4.2 Create `src/ui/components.tsx` — card flip, masked password reveal/hide, form modal, delete confirm, search/filters
-- [ ] 4.3 Create `src/ui/api.tsx` + `src/ui/styles.css` — typed IPC client, scoped CSS
-- [ ] 4.4 Component tests: Spanish labels, masking, flip fields, warnings, confirmation, invalid form (vault-ui)
+- [x] 4.1 Create `src/ui/App.tsx` — login/locked screens with Spanish irreversible-loss warnings
+- [x] 4.2 Create `src/ui/components.tsx` — card flip, masked password reveal/hide, form modal, delete confirm, search/filters
+- [x] 4.3 Create `src/ui/api.tsx` + `src/ui/styles.css` — typed IPC client, scoped CSS
+- [x] 4.4 Component tests: Spanish labels, masking, flip fields, warnings, confirmation, invalid form (vault-ui)
 
 ## Phase 5: Verification & Docs
 
