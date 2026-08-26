@@ -61,4 +61,4 @@ Threat matrix: all N/A — no RED-test tasks.
 ## Phase 5: Verification & Docs
 
 - [ ] 5.1 `npm run tauri dev` E2E: create→unlock→search→copy→auto-lock
-- [ ] 5.2 README + `.gitignore` (vault DB/backups), remove debug code
+- [x] 5.2 README + `.gitignore` (vault DB/backups), remove debug code

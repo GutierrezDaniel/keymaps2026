@@ -142,3 +142,166 @@
 ## Cumulative State (all PRs)
 
 - PR 1 (1.1–1.7): ✅ PR 2 (2.1–2.3): ✅ PR 3 (3.1–3.5): ✅ PR 4 (4.1–4.4): ✅ — Phases 1–4 complete. Remaining: Phase 5 (5.1 E2E, 5.2 docs/.gitignore).
+
+# Apply Progress — Password Manager MVP (Phase 5 / Task 5.2)
+
+**Change**: password-manager-mvp
+**Task**: 5.2 — README + `.gitignore` (vault DB/backups), remove debug code
+**Mode**: Standard (strict_tdd: false — docs/guardrails task, no tests required)
+**Date**: 2026-08-26
+**Status**: 5.2 COMPLETE — README.md created; `.gitignore` hardened for vault DB + backups; debug-code scan found nothing to remove (no code changed). Commit `c7fd855` on `phase/5-e2e-docs`. Remaining: 5.1 (E2E with user — orchestrator).
+
+## Completed Task (5.2)
+
+| Task | Status | Evidence |
+|---|---|---|
+| 5.2 README + `.gitignore` (vault DB/backups), remove debug code | ✅ | **README.md** (new, root): English — project description (personal password manager, Tauri v2 + Rust + SQLite + React/TS), prerequisites (Rust 1.98+, Node 18+, webkit2gtk-4.1/gtk3/libsoup-3.0), dev (`npm install`, `npm run tauri dev`), tests (`npm test -- --run`, `cargo test --lib`, `cargo test --test vault_repo`), build (`npm run tauri build`), security notes (Argon2id + AES-256-GCM, master password never stored, key only in Rust, 5-min auto-lock, 20s clipboard clear, encrypted backup). **`.gitignore`**: added vault section — `vault.db` + WAL/journal sidecars (`vault.db-wal`, `vault.db-shm`, `vault.db-journal`) and backup patterns (`*.backup.db`, `backup*.db`). **Debug scan**: `dbg!`/`println!`/`eprintln!`/`print!`/`eprint!`/`console.*`/`debugger`/`TODO`/`FIXME` grepped across `src-tauri/src` and `src/ui` — zero genuine leftovers; the single `eprintln!` in `main.rs` is the intentional headless-shell message ("build with --features tauri-app") and was kept per the no-intentional-logging rule. No code changed. |
+
+## Verification
+
+- `git status` clean after commit; diff = README.md (new, 56 lines) + `.gitignore` (+11 lines) only.
+- `npm test -- --run` re-verified green: **43 passed** (16 api + 13 components + 14 App) — confirms the README test command is accurate.
+- README commands verified against `package.json` scripts (`test` = `vitest run`; `tauri` script drives `tauri dev`/`tauri build`) and tasks.md focused test commands (`cargo test --lib`, `cargo test --test vault_repo` from `src-tauri/`).
+- Runtime vault path confirmed from source: `SqliteVaultRepository::open(data_dir.join("vault.db"))` in `adapters/tauri.rs` (`app_data_dir()` for identifier `dev.keymaps2026.app` → `~/.local/share/dev.keymaps2026.app/` on Linux); WAL mode set in `sqlite.rs` → sidecars needed ignoring. Backup export dest is user-chosen (arbitrary name) with `<dest>.tmp` temp sibling — backup patterns cover common names in the tree.
+- No Rust/UI code touched → no build required (`cargo test --lib`/`vault_repo` remain green from PR 3; UI suite re-verified above).
+
+## Work Unit Evidence
+
+| Evidence | Required value |
+|---|---|
+| Focused test command + result | `npm test -- --run` (repo root) → `Test Files 3 passed (3); Tests 43 passed (43)`. No Rust code touched, so `cargo test --lib` (42) / `cargo test --test vault_repo` (8) unaffected (green from prior PRs). |
+| Runtime harness | `N/A` — docs/guardrails work unit has no runtime boundary; `npm run tauri dev` is deliberately NOT run (task 5.1, orchestrator+user). |
+| Rollback boundary | Delete `README.md`; remove the 7-line vault section from `.gitignore`; drop commit `c7fd855`. No source file touched. |
+
+## Commit
+
+| Commit | Unit |
+|---|---|
+| `c7fd855 docs: add README and ignore vault database and backup artifacts` | README.md + .gitignore vault/backup section |
+
+## Deviations from Design
+
+- None — docs/guardrails task, no design surface. Debug-code removal was an empty set (explicitly reported).
+
+## Issues Found
+
+- None. Note for 5.1: the E2E run creates/uses the real vault at `~/.local/share/dev.keymaps2026.app/vault.db`; the new `.gitignore` entries are belt-and-braces only (runtime data lives outside the repo).
+
+## Cumulative State (all PRs + Phase 5)
+
+- PR 1 (1.1–1.7): ✅ PR 2 (2.1–2.3): ✅ PR 3 (3.1–3.5): ✅ PR 4 (4.1–4.4): ✅ 5.2: ✅ — Remaining: 5.1 (E2E with user, orchestrator), then verify + archive.
+
+# Bug fixes (E2E findings) — post-Phase-5 follow-up
+
+**Change**: password-manager-mvp
+**Batch**: 2026-08-26 — three UI bugs confirmed by the orchestrator during Phase 5 E2E review; fixes applied on `phase/5-e2e-docs`.
+**Mode**: Standard (targeted remediation of confirmed findings; tests updated/extended alongside fixes)
+**Status**: All three fixes implemented — `npm test -- --run` green (**47 passed**, 43 prior + 4 new/updated); `npm run build` (tsc && vite build) clean. Task 5.1 stays `[ ]` — E2E validation of these fixes is still pending the user's confirmation.
+
+## Fixed Bugs
+
+| # | Bug | Root cause | Fix | Files |
+|---|---|---|---|---|
+| 1 | Clearing the email filter does not re-list all entries | `<input type="search">` sent `email: ""` (empty string) on clear, not `null`; the typed client forwarded `Some("")` to the Rust `list` command, which built a real `email = ''` SQL filter matching nothing. The site input had the same latent bug. | Normalize empty strings to `null` for both the email AND site filter inputs (`event.target.value \|\| null`), matching the category `<select>`'s existing pattern. | `src/ui/components.tsx` |
+| 2 | Category filter `<select>` renders with a native white background | WebKit/GTK (Tauri on Linux) ignores `background-color` on `<select>` with default `appearance: auto`, so `var(--surface)` never rendered on the select while sibling inputs themed correctly. | Added `appearance: none` + `-webkit-appearance: none` to `.filter-input` (background stays `var(--surface)` — matches the sibling inputs exactly) and to the `.modal input, .modal select` rule (background `var(--bg)` — matches the modal inputs). Border/radius/padding unchanged. | `src/ui/styles.css` |
+| 3 | Editing an entry does not pre-fill the form | `EntryFormModal` initializes `useState` from `initial` via lazy initializers that run once at mount; App renders the modal unconditionally (only toggling `open`), so initializers ran at app mount with `initial = null` and never re-ran when `editing` changed. | Remount the modal whenever the editing target changes: `<EntryFormModal key={editing?.id ?? "new"} …>`. React recreates the component (fresh `useState` initializers) for each entry and for new-entry mode. `initialPassword` flow verified: `details[editing.id]?.password ?? ""` pre-fills only when the card was flipped (as designed). | `src/ui/App.tsx` |
+
+## Tests Added/Updated
+
+| File | Tests |
+|---|---|
+| `src/ui/components.test.tsx` (+3) | SearchFilters: typed site → `{ site: "x" }`; typed email → `{ email: "x" }`; clearing email → `{ email: null }`; clearing site → `{ site: null }` |
+| `src/ui/App.test.tsx` (+1) | Opening the edit modal (after flipping a card) pre-fills site/link/email/username/category + password (flipped) and the title reads "Editar entrada" |
+
+## Verification
+
+- `npm test -- --run`: **Test Files 3 passed (3); Tests 47 passed (47)** — 16 (api) + 16 (components) + 15 (App).
+- `npm run build` (tsc && vite build): clean — dist/assets/index-*.js 157.31 kB, CSS 6.06 kB.
+- No Rust/backend touched (`cargo` untouched by design); `npm run tauri:dev` NOT run (task 5.1 remains orchestrator+user).
+
+## Work Unit Evidence
+
+| Evidence | Required value |
+|---|---|
+| Focused test command + result | `npm test -- --run` → `Test Files 3 passed (3); Tests 47 passed (47)`. Per file: `api.test.tsx` 16, `components.test.tsx` 16 (13 + 3 SearchFilters), `App.test.tsx` 15 (14 + 1 edit prefill). `npm run build` → tsc clean + vite build success. |
+| Runtime harness | `N/A` — the WebKit/GTK `<select>` background bug (Bug 2) is a native-rendering issue that jsdom cannot reproduce; fix follows the standard `appearance: none` pattern and its visual confirmation is part of task 5.1's remaining E2E. |
+| Rollback boundary | Revert the 5 edits: `src/ui/components.tsx` (2 onChange normalizations), `src/ui/styles.css` (2 appearance blocks), `src/ui/App.tsx` (key prop); drop the 4 added tests. No other file touched. |
+
+## Deviations from Diagnosis
+
+- None — all three root causes matched the orchestrator's diagnosis exactly; fixes implemented as prescribed.
+
+## Remaining Tasks
+
+- [ ] 5.1 `npm run tauri dev` E2E — user/orchestrator confirmation of these fixes + full flow (create→unlock→search→copy→auto-lock). Intentionally NOT marked `[x]`.
+
+# Email selector filter (user refinement) — post-Phase-5 follow-up
+
+**Change**: password-manager-mvp
+**Batch**: 2026-08-26 — user UX refinement after the Phase 5 review: replace the email **text input** filter in `SearchFilters` with a **`<select>` dropdown** listing every distinct email stored in the vault ("Todos los correos" = empty value clears the filter).
+**Mode**: Standard (strict_tdd: false). Not a tasks.md task; 5.1 stays `[ ]`.
+**Status**: Implemented and verified — `cargo test --lib` **43 passed**; `cargo test --test vault_repo` **12 passed** (8 + 4 new); `npm test -- --run` **52 passed** (47 + 5 new); `npm run build` clean; `cargo build --features tauri-app` compiles.
+
+## Why the backend
+
+Deriving emails from the currently loaded `entries` would be incomplete whenever a filter is active (category/site filter shrinks the loaded list to a subset). The complete distinct set MUST come from the repository, so a `list_emails` port method + Tauri command was added.
+
+## Implemented
+
+| Layer | Change |
+|---|---|
+| Port | `VaultRepository::list_emails(&self) -> Result<Vec<String>, RepositoryError>` — distinct non-empty emails, ascending (case-sensitive BINARY collation). |
+| Adapter | `SqliteVaultRepository`: `SELECT DISTINCT email FROM entries WHERE email <> '' ORDER BY email`, `store_err` mapping. |
+| Command | `VaultApp::list_emails` (session-locked via `require_unlocked`, `Locked` when locked) + `#[tauri::command] list_emails` (12th command, registered in `build`). `Arc<Mutex<…>>` trait impl + `FakeRepo` (vault_service tests) updated for the new trait method. |
+| Client | `api.listEmails(): Promise<string[]>` invoking `list_emails` with no args. |
+| UI | `SearchFilters` gains `emails: string[]`; email `<input>` → `<select className="filter-input">` with `<option value="">Todos los correos</option>` + one option per email; selecting emits `{ email: value || null }`. `Filters` shape unchanged. |
+| App | `emails` state loaded via `loadEmails()` on boot (alongside `api.list(null)`) and on every `applyList` refresh; cleared in `lockScreen()`; passed to `<SearchFilters>`. |
+
+## Tests Added/Updated
+
+| File | Tests |
+|---|---|
+| `tests/vault_repo.rs` (+4) | `list_emails_returns_each_distinct_email_once` (two entries sharing an email → one result), `list_emails_excludes_empty_emails`, `list_emails_orders_ascending`, `list_emails_is_empty_on_fresh_vault` |
+| `tauri.rs` unit (+1) | `list_emails_requires_unlocked_session_and_returns_distinct` — command surface returns distinct emails and refuses with `CommandError::Locked` when locked |
+| `api.test.tsx` (+1) | `listEmails` invokes `list_emails` with no arguments |
+| `components.test.tsx` (SearchFilters block rewritten) | email select renders provided emails + "Todos los correos"; selecting an email emits `{ email: "x" }`; selecting "Todos los correos" emits `{ email: null }`; site/category coverage kept |
+| `App.test.tsx` (+2) | emails are loaded into the filter when unlocked; selecting an email filters the vault list via `list` |
+
+## Verification
+
+- `cargo test --lib` (from `src-tauri/`): **43 passed, 0 failed** — 42 prior + 1 new (`list_emails` command surface).
+- `cargo test --test vault_repo` (from `src-tauri/`): **12 passed, 0 failed** — 8 prior + 4 new email-list tests.
+- `npm test -- --run` (repo root): **Test Files 3 passed (3); Tests 52 passed (52)** — 17 (api) + 18 (components) + 17 (App).
+- `npm run build` (tsc && vite build): **clean** — dist/assets/index-aX9MAhx0.js 157.61 kB, CSS 6.06 kB.
+- `cargo build --features tauri-app`: **compiles** with the 12th command registered.
+- `npm run tauri:dev` NOT run (task 5.1 remains orchestrator+user).
+
+## Work Unit Evidence
+
+| Evidence | Required value |
+|---|---|
+| Focused test command + result | Backend unit: `cargo test --lib` → 43 passed; `cargo test --test vault_repo` → 12 passed (per-file: `list_emails_*` 4 tests). Frontend unit: `npm test -- --run` → 52 passed (per-file: api 17, components 18, App 17). |
+| Runtime harness | `N/A` — the Tauri IPC is mocked headless in jsdom by design; the Rust command surface is proven headlessly (`list_emails` refuses `Locked` and returns distinct values) and `cargo build --features tauri-app` compiles the registered command. Real webview confirmation of the dropdown is part of task 5.1's remaining E2E. |
+| Rollback boundary | Backend: revert `b7595b9` (5 files: trait, sqlite, tauri command/impl/test, FakeRepo, vault_repo tests). Frontend: revert `cd2e0dc` (6 files: api client + 3 UI files + 3 test files); `SearchFilters` falls back to the text input while keeping the `|| null` normalization from the bug-fix batch. |
+
+## Commits (work-unit per commit, conventional, no AI attribution)
+
+| Commit | Unit |
+|---|---|
+| `b7595b9 feat(core): list distinct vault emails for the email filter` | backend: port + SQLite + command + FakeRepo + Rust tests (vault_repo + tauri) |
+| `3a32b47 fix(ui): normalize cleared filters, theme selects and pre-fill the edit form` | pre-existing uncommitted E2E bug-fix batch (was in the working tree before this task; committed first so the frontend work unit stays clean) |
+| `cd2e0dc feat(ui): replace the email filter input with a vault-backed select` | frontend: api client + SearchFilters select + App emails state + UI tests |
+
+## Deviations from Design
+
+- None — implementation follows the plan exactly. Note: `list_emails` is the **12th** command (the design's table names 10; `create_vault` was already the 11th per PR 3's deviation note).
+- The pre-existing bug-fix batch (documented above) was uncommitted in the working tree; it was committed as its own work unit (`3a32b47`) before the feature commits to keep the frontend unit reviewable. `README.md`, `package.json` (`tauri:dev`/`tauri:build`) and `src-tauri/Cargo.toml` script tweaks remain uncommitted (not part of this task).
+
+## Issues Found
+
+- None blocking. The `Filters` type shape is untouched (still `{ site?, category?, email? }` with null semantics); empty-email entries (`email = ''`) are excluded from the dropdown and from the filter's practical effect (an `email = ''` selection can no longer be produced from the UI).
+- Git note: reconstructing the bug-fix batch as its own commit required restoring HEAD for the 5 shared UI files, re-applying only the bug-fix hunks, and verifying the intermediate state (47 tests green) before committing — done, no content lost.
+
+## Cumulative State (all PRs + Phase 5)
+
+- PR 1–4, 5.2, E2E bug fixes, and this refinement all complete. Remaining: 5.1 (E2E with user, orchestrator), then verify + archive.
