@@ -16,7 +16,7 @@ mechanism — losing it makes the vault permanently unrecoverable.**
 ## Prerequisites
 
 - Rust 1.98+
-- Node.js 18+
+- Node.js 22+ (`.nvmrc` pins 22 — the Vite 8/Vitest 4 toolchain requires `^20.19 || >=22.12`)
 - Linux system libraries: `webkit2gtk-4.1`, `gtk3`, `libsoup-3.0`
   (Tauri v2 prerequisites — https://tauri.app/start/prerequisites/)
 
