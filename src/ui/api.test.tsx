@@ -51,6 +51,13 @@ describe("api — command wiring", () => {
     });
   });
 
+  it("listEmails invokes list_emails with no arguments", async () => {
+    mockedInvoke.mockResolvedValue(["a@b.c", "team@example.com"]);
+    const emails = await api.listEmails();
+    expect(emails).toEqual(["a@b.c", "team@example.com"]);
+    expect(mockedInvoke).toHaveBeenCalledWith("list_emails");
+  });
+
   it("getEntryDetails invokes get_entry_details by record id", async () => {
     mockedInvoke.mockResolvedValue({ summary: {}, password: "" });
     await api.getEntryDetails("abc123");

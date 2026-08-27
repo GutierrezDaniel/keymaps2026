@@ -63,6 +63,19 @@ fn save(repo: &SqliteVaultRepository, key: &VaultKey, id: RecordId, site: &str, 
     e
 }
 
+/// Save a record with a specific email (the `save` helper fixes "a@b.c").
+fn save_with_email(
+    repo: &SqliteVaultRepository,
+    key: &VaultKey,
+    id: RecordId,
+    site: &str,
+    email: &str,
+) -> EntryRecord {
+    let e = record(key, id, site, email, "servicios", "pw");
+    repo.save(&e).expect("save must succeed");
+    e
+}
+
 /// A file-backed repository plus the temp dir that owns its database file.
 struct Db {
     _dir: TempDir,
@@ -173,6 +186,60 @@ fn save_list_update_delete_roundtrip() {
 fn list_without_filters_is_empty_on_fresh_db() {
     let repo = SqliteVaultRepository::open_in_memory().unwrap();
     assert!(repo.list(&Filters::new()).unwrap().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Distinct email list (email selector source).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn list_emails_returns_each_distinct_email_once() {
+    let repo = SqliteVaultRepository::open_in_memory().unwrap();
+    let key = test_key();
+
+    save_with_email(&repo, &key, rid(1), "site-a", "a@example.com");
+    save_with_email(&repo, &key, rid(2), "site-b", "a@example.com");
+
+    let emails = repo.list_emails().unwrap();
+    assert_eq!(emails, vec!["a@example.com".to_string()]);
+}
+
+#[test]
+fn list_emails_excludes_empty_emails() {
+    let repo = SqliteVaultRepository::open_in_memory().unwrap();
+    let key = test_key();
+
+    save_with_email(&repo, &key, rid(1), "site-a", "a@example.com");
+    save_with_email(&repo, &key, rid(2), "site-b", "");
+
+    let emails = repo.list_emails().unwrap();
+    assert_eq!(emails, vec!["a@example.com".to_string()]);
+}
+
+#[test]
+fn list_emails_orders_ascending() {
+    let repo = SqliteVaultRepository::open_in_memory().unwrap();
+    let key = test_key();
+
+    save_with_email(&repo, &key, rid(1), "site-a", "z@example.com");
+    save_with_email(&repo, &key, rid(2), "site-b", "m@example.com");
+    save_with_email(&repo, &key, rid(3), "site-c", "a@example.com");
+
+    let emails = repo.list_emails().unwrap();
+    assert_eq!(
+        emails,
+        vec![
+            "a@example.com".to_string(),
+            "m@example.com".to_string(),
+            "z@example.com".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn list_emails_is_empty_on_fresh_vault() {
+    let repo = SqliteVaultRepository::open_in_memory().unwrap();
+    assert!(repo.list_emails().unwrap().is_empty());
 }
 
 // ---------------------------------------------------------------------------

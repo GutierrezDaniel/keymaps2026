@@ -345,11 +345,16 @@ export function DeleteConfirm({ entry, onConfirm, onCancel }: DeleteConfirmProps
 
 export interface SearchFiltersProps {
   filters: Filters;
+  /** Complete distinct email set from the repository — never derived from the
+   *  loaded entry list, which a filter can shrink to a subset. */
+  emails: string[];
   onChange: (next: Filters) => void;
 }
 
-/** Site search plus category and email filters, all conjunctive. */
-export function SearchFilters({ filters, onChange }: SearchFiltersProps) {
+/** Site search plus category and email selects, all conjunctive. The email
+ *  options come from the backend so the selector stays complete even while a
+ *  filter shrinks the loaded entries. */
+export function SearchFilters({ filters, emails, onChange }: SearchFiltersProps) {
   return (
     <div className="filters">
       <input
@@ -358,7 +363,7 @@ export function SearchFilters({ filters, onChange }: SearchFiltersProps) {
         placeholder="Buscar por sitio…"
         aria-label="Buscar por sitio"
         value={filters.site ?? ""}
-        onChange={(event) => onChange({ ...filters, site: event.target.value })}
+        onChange={(event) => onChange({ ...filters, site: event.target.value || null })}
       />
       <select
         className="filter-input"
@@ -375,14 +380,21 @@ export function SearchFilters({ filters, onChange }: SearchFiltersProps) {
           </option>
         ))}
       </select>
-      <input
-        type="search"
+      <select
         className="filter-input"
-        placeholder="Filtrar por correo…"
         aria-label="Filtrar por correo"
         value={filters.email ?? ""}
-        onChange={(event) => onChange({ ...filters, email: event.target.value })}
-      />
+        onChange={(event) =>
+          onChange({ ...filters, email: event.target.value || null })
+        }
+      >
+        <option value="">Todos los correos</option>
+        {emails.map((email) => (
+          <option key={email} value={email}>
+            {email}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }

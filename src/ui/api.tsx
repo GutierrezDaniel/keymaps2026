@@ -165,6 +165,12 @@ const api = {
     return invoke<EntrySummary[]>("list", filtersPayload(filters));
   },
 
+  /** List the distinct non-empty emails stored in the vault, ascending — the
+   *  complete set for the email filter, independent of any active filter. */
+  async listEmails(): Promise<string[]> {
+    return invoke<string[]>("list_emails");
+  },
+
   /** Fetch a full entry including the transient decrypted password. */
   async getEntryDetails(id: string): Promise<EntryDetails> {
     return invoke<EntryDetails>("get_entry_details", { id });

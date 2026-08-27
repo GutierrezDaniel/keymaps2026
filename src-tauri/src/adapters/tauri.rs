@@ -357,6 +357,10 @@ impl VaultRepository for Arc<Mutex<SqliteVaultRepository>> {
         self.lock().unwrap().list(filters)
     }
 
+    fn list_emails(&self) -> Result<Vec<String>, RepositoryError> {
+        self.lock().unwrap().list_emails()
+    }
+
     fn save(&self, entry: &EntryRecord) -> Result<(), RepositoryError> {
         self.lock().unwrap().save(entry)
     }
@@ -497,6 +501,14 @@ impl VaultApp {
         Ok(self.service.list_entries(filters)?)
     }
 
+    /// List the distinct non-empty emails stored in the vault, ascending —
+    /// the complete set for the email filter selector, independent of any
+    /// active filter that shrinks the loaded entry list.
+    pub fn list_emails(&self) -> Result<Vec<String>, CommandError> {
+        self.require_unlocked()?;
+        Ok(self.repo.lock().unwrap().list_emails()?)
+    }
+
     pub fn get_entry_details(&self, id: &RecordId) -> Result<EntryDetails, CommandError> {
         self.with_key(|key| Ok(self.service.get_entry_details(id, key)?))
     }
@@ -613,6 +625,7 @@ pub fn build(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
             unlock,
             lock,
             list,
+            list_emails,
             get_entry_details,
             create,
             update,
@@ -663,6 +676,12 @@ fn list(
     let filters = filters.map(Into::into).unwrap_or_default();
     let entries = state.list_entries(&filters)?;
     Ok(entries.into_iter().map(EntrySummaryDto::from).collect())
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn list_emails(state: tauri::State<'_, VaultApp>) -> Result<Vec<String>, CommandError> {
+    state.list_emails()
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1039,6 +1058,30 @@ mod tests {
         assert_eq!(app.list_entries(&filters).unwrap().len(), 2);
         let filters = Filters::new().with_site("gitlab");
         assert_eq!(app.list_entries(&filters).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn list_emails_requires_unlocked_session_and_returns_distinct() {
+        let app = unlocked_app();
+        app.create_entry(&entry_input("github", "a")).unwrap();
+        let team = EntryInput::new(
+            "gitlab",
+            "https://gitlab",
+            secret("b"),
+            "team@example.com",
+            "user",
+            INITIAL_CATEGORIES[0],
+        );
+        app.create_entry(&team).unwrap();
+
+        let emails = app.list_emails().unwrap();
+        assert_eq!(
+            emails,
+            vec!["a@b.c".to_string(), "team@example.com".to_string()]
+        );
+
+        app.lock();
+        assert_eq!(app.list_emails().unwrap_err(), CommandError::Locked);
     }
 
     // -----------------------------------------------------------------------
