@@ -9,9 +9,16 @@
 //   is how the Rust 5-minute auto-lock surfaces to the UI).
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import { Lock, Plus } from "lucide-react";
 import { api, toCommandError } from "./api";
 import type { EntrySummary, EntryDetails, EntryInput, Filters, CopyField, CommandError } from "./api";
-import { BackoffNotice, DeleteConfirm, EntryCard, EntryFormModal, SearchFilters } from "./components";
+import {
+  BackoffNotice,
+  DeleteConfirm,
+  EntryCard,
+  EntryModal,
+  SearchFilters,
+} from "./components";
 
 type Phase = "booting" | "create" | "locked" | "unlocked";
 
@@ -107,7 +114,8 @@ function CreateScreen({ error, onCreated }: CreateScreenProps) {
 
 // ---------------------------------------------------------------------------
 // Locked screen — login with the irreversible-loss warning (vault-ui "Locked-
-// state warning") and the backoff countdown (vault-session "Bounded login").
+// state warning") placed as a quiet note below the password input, and the
+// backoff countdown (vault-session "Bounded login").
 // ---------------------------------------------------------------------------
 
 interface LoginScreenProps {
@@ -129,11 +137,6 @@ function LoginScreen({ error, notice, backoff, onExpireBackoff, onUnlock }: Logi
   return (
     <div className="screen">
       <h2>Desbloquear bóveda</h2>
-      <p className="warning" role="alert">
-        <strong>Advertencia: pérdida irreversible</strong>
-        Si olvidas la contraseña maestra, perderás el acceso a la bóveda de forma permanente.
-        No existe ningún mecanismo de recuperación.
-      </p>
       <form onSubmit={handleSubmit}>
         <label htmlFor="master-password">
           Contraseña maestra
@@ -157,6 +160,11 @@ function LoginScreen({ error, notice, backoff, onExpireBackoff, onUnlock }: Logi
           Desbloquear
         </button>
       </form>
+      <p className="warning quiet" role="alert">
+        <strong>Advertencia: pérdida irreversible</strong>
+        Si olvidas la contraseña maestra, perderás el acceso a la bóveda de forma permanente.
+        No existe ningún mecanismo de recuperación.
+      </p>
     </div>
   );
 }
@@ -171,7 +179,7 @@ export default function App() {
   const [emails, setEmails] = useState<string[]>([]);
   const [filters, setFilters] = useState<Filters>({});
   const [details, setDetails] = useState<Record<string, EntryDetails>>({});
-  const [flipped, setFlipped] = useState<Record<string, boolean>>({});
+  const [leavingId, setLeavingId] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<EntrySummary | null>(null);
   const [deleting, setDeleting] = useState<EntrySummary | null>(null);
@@ -188,7 +196,7 @@ export default function App() {
     setEntries([]);
     setEmails([]);
     setDetails({});
-    setFlipped({});
+    setLeavingId(null);
     setEditing(null);
     setDeleting(null);
     setFormOpen(false);
@@ -217,7 +225,7 @@ export default function App() {
       const list = await api.list(f);
       setEntries(list);
       setDetails({});
-      setFlipped({});
+      setLeavingId(null);
       setPhase("unlocked");
       void loadEmails();
     } catch (raw) {
@@ -314,21 +322,27 @@ export default function App() {
     void applyList(next);
   }
 
-  async function handleToggleFlip(id: string) {
-    setFlipped((previous) => ({ ...previous, [id]: !previous[id] }));
-    if (!details[id]) {
+  /** Open the unified entry modal for an existing entry, fetching the
+   *  decrypted details (password prefill) on the first open. */
+  async function openEditEntry(entry: EntrySummary) {
+    setError(null);
+    if (!details[entry.id]) {
       try {
-        const entryDetails = await api.getEntryDetails(id);
-        setDetails((previous) => ({ ...previous, [id]: entryDetails }));
+        const entryDetails = await api.getEntryDetails(entry.id);
+        setDetails((previous) => ({ ...previous, [entry.id]: entryDetails }));
       } catch (raw) {
         const commandError = toCommandError(raw);
         if (commandError.kind === "Locked") {
           lockScreen();
-        } else {
-          setError(spanishMessage(commandError));
+          return;
         }
+        setError(spanishMessage(commandError));
+        return;
       }
     }
+    setEditing(entry);
+    editingRef.current = entry;
+    setFormOpen(true);
   }
 
   async function handleCopy(id: string, field: CopyField) {
@@ -348,13 +362,6 @@ export default function App() {
   function openNewEntry() {
     setEditing(null);
     editingRef.current = null;
-    setError(null);
-    setFormOpen(true);
-  }
-
-  function openEditEntry(entry: EntrySummary) {
-    setEditing(entry);
-    editingRef.current = entry;
     setError(null);
     setFormOpen(true);
   }
@@ -386,16 +393,20 @@ export default function App() {
     const entry = deleting;
     if (!entry) return;
     setError(null);
+    setDeleting(null);
+    setLeavingId(entry.id);
+    // Let the leave animation play before the list refresh removes the card.
+    await new Promise((resolve) => window.setTimeout(resolve, 320));
     try {
       await api.delete(entry.id);
-      setDeleting(null);
+      setLeavingId(null);
       await applyList(filtersRef.current);
     } catch (raw) {
+      setLeavingId(null);
       const commandError = toCommandError(raw);
       if (commandError.kind === "Locked") {
         lockScreen();
       } else if (commandError.kind === "NotFound") {
-        setDeleting(null);
         await applyList(filtersRef.current);
       } else {
         setError(spanishMessage(commandError));
@@ -442,12 +453,13 @@ export default function App() {
     <div className="app-shell">
       <header className="vault-header">
         <h1>Mi bóveda</h1>
-        <div>
+        <div className="vault-actions">
           <button type="button" className="primary-button" onClick={openNewEntry}>
+            <Plus size={16} aria-hidden="true" />
             Nueva entrada
           </button>
-          <button type="button" className="action-button" onClick={handleLock}>
-            Bloquear
+          <button type="button" className="icon-button" aria-label="Bloquear" onClick={handleLock}>
+            <Lock size={18} />
           </button>
         </div>
       </header>
@@ -473,18 +485,14 @@ export default function App() {
             <EntryCard
               key={entry.id}
               entry={entry}
-              details={details[entry.id] ?? null}
-              flipped={Boolean(flipped[entry.id])}
-              onToggleFlip={() => void handleToggleFlip(entry.id)}
-              onCopy={(field) => void handleCopy(entry.id, field)}
-              onEdit={() => openEditEntry(entry)}
-              onDelete={() => setDeleting(entry)}
+              leaving={leavingId === entry.id}
+              onOpen={() => void openEditEntry(entry)}
             />
           ))}
         </div>
       )}
 
-      <EntryFormModal
+      <EntryModal
         key={editing?.id ?? "new"}
         open={formOpen}
         initial={editing}
@@ -495,6 +503,8 @@ export default function App() {
           setEditing(null);
           editingRef.current = null;
         }}
+        onCopy={editing ? (field) => void handleCopy(editing.id, field) : undefined}
+        onDelete={editing ? () => setDeleting(editing) : undefined}
       />
 
       {deleting && (

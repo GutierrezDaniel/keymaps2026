@@ -159,3 +159,6 @@ backup*.db
 
 # Local tooling (skill registry with absolute local paths) — never commit
 .atl/
+
+# Impeccable review artifacts (local only)
+.impeccable/

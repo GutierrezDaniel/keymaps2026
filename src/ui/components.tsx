@@ -1,14 +1,24 @@
-// Spanish UI components: entry cards with flip, masked passwords with
-// reveal/hide, the entry form modal, delete confirmation, search/filters and
-// the login backoff notice (vault-ui spec).
-//
-// All user-visible copy is neutral professional Spanish. Components are
-// presentational: they receive data and callbacks, and never talk to the
-// backend directly — which keeps them testable headless.
+// Spanish UI components — world "Cuaderno de Códigos": entry cards show only
+// the site name with a category color chip; selecting a card opens a centered
+// details modal (flip-in) with icon actions. All user-visible copy is neutral
+// professional Spanish. Components are presentational: they receive data and
+// callbacks, and never talk to the backend directly — which keeps them
+// testable headless.
 import { useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import type { FormEvent, ReactNode } from "react";
+import {
+  AtSign,
+  Check,
+  Copy,
+  Eye,
+  EyeOff,
+  ListFilter,
+  Search,
+  Trash2,
+  X,
+} from "lucide-react";
 import { CATEGORIES } from "./api";
-import type { EntrySummary, EntryDetails, EntryInput, Filters, CopyField } from "./api";
+import type { EntrySummary, EntryInput, Filters, CopyField } from "./api";
 import "./styles.css";
 
 // ---------------------------------------------------------------------------
@@ -27,17 +37,18 @@ export function MaskedPassword({ value }: { value: string }) {
       </span>
       <button
         type="button"
-        className="link-button"
+        className="icon-button"
+        aria-label={revealed ? "Ocultar" : "Mostrar"}
         onClick={() => setRevealed((previous) => !previous)}
       >
-        {revealed ? "Ocultar" : "Mostrar"}
+        {revealed ? <EyeOff size={15} /> : <Eye size={15} />}
       </button>
     </span>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Copy control with transient "Copiado" feedback.
+// Copy control as an icon with transient "Copiado" feedback.
 // ---------------------------------------------------------------------------
 
 function CopyButton({ label, onCopy }: { label: string; onCopy: () => void }) {
@@ -58,121 +69,70 @@ function CopyButton({ label, onCopy }: { label: string; onCopy: () => void }) {
   }
 
   return (
-    <button type="button" className="copy-button" onClick={handleClick}>
-      {copied ? "Copiado" : label}
+    <button
+      type="button"
+      className={`icon-button copy-button${copied ? " copied" : ""}`}
+      aria-label={copied ? "Copiado" : label}
+      onClick={handleClick}
+    >
+      {copied ? <Check size={15} /> : <Copy size={15} />}
     </button>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Entry card with flip (vault-ui "Spanish entry cards").
+// Entry card — summary only (site name + category color chip). The whole card
+// is the affordance that opens the details modal.
 // ---------------------------------------------------------------------------
 
 export interface EntryCardProps {
   entry: EntrySummary;
-  /** Decrypted details; null until the card has been flipped once. */
-  details: EntryDetails | null;
-  flipped: boolean;
-  onToggleFlip: () => void;
-  onCopy: (field: CopyField) => void;
-  onEdit: () => void;
-  onDelete: () => void;
+  /** True while the card is animating out before deletion. */
+  leaving?: boolean;
+  onOpen: () => void;
 }
 
-/** A card whose front shows the site summary and whose back shows all six
- *  fields with Spanish labels. Copy controls exist only for link, password,
- *  email and username — never for the category (vault-ui "Non-copyable
- *  category"). */
-export function EntryCard({
-  entry,
-  details,
-  flipped,
-  onToggleFlip,
-  onCopy,
-  onEdit,
-  onDelete,
-}: EntryCardProps) {
-  const password = details?.password ?? "";
+/** A card whose front shows only the site name; the category is carried by a
+ *  colored top chip (data-category drives the ink color). Clicking opens the
+ *  details modal. */
+export function EntryCard({ entry, leaving = false, onOpen }: EntryCardProps) {
   return (
-    <article className={`entry-card${flipped ? " flipped" : ""}`} data-testid="entry-card">
-      <div className="card-inner">
-        <div className="card-face card-front">
-          <h3 className="card-site">{entry.site}</h3>
-          <span className="category-badge">{entry.category}</span>
-          <p className="card-link">{entry.link}</p>
-          <p className="card-email">{entry.email}</p>
-          <button type="button" className="flip-button" onClick={onToggleFlip}>
-            Ver detalles
-          </button>
-        </div>
-
-        <div className="card-face card-back">
-          <dl className="entry-fields">
-            <div className="field-row">
-              <dt>Sitio</dt>
-              <dd>{entry.site}</dd>
-            </div>
-            <div className="field-row">
-              <dt>Enlace</dt>
-              <dd>
-                {entry.link}
-                <CopyButton label="Copiar enlace" onCopy={() => onCopy("link")} />
-              </dd>
-            </div>
-            <div className="field-row">
-              <dt>Contraseña</dt>
-              <dd>
-                <MaskedPassword value={password} />
-                <CopyButton label="Copiar contraseña" onCopy={() => onCopy("password")} />
-              </dd>
-            </div>
-            <div className="field-row">
-              <dt>Correo</dt>
-              <dd>
-                {entry.email}
-                <CopyButton label="Copiar correo" onCopy={() => onCopy("email")} />
-              </dd>
-            </div>
-            <div className="field-row">
-              <dt>Usuario</dt>
-              <dd>
-                {entry.username}
-                <CopyButton label="Copiar usuario" onCopy={() => onCopy("username")} />
-              </dd>
-            </div>
-            <div className="field-row">
-              <dt>Categoría</dt>
-              <dd>{entry.category}</dd>
-            </div>
-          </dl>
-          <div className="card-actions">
-            <button type="button" className="flip-button" onClick={onToggleFlip}>
-              Ver resumen
-            </button>
-            <button type="button" className="action-button" onClick={onEdit}>
-              Editar
-            </button>
-            <button type="button" className="action-button danger" onClick={onDelete}>
-              Eliminar
-            </button>
-          </div>
-        </div>
-      </div>
+    <article
+      className={`entry-card${leaving ? " leaving" : ""}`}
+      data-testid="entry-card"
+      data-category={entry.category}
+    >
+      <button
+        type="button"
+        className="card-open"
+        aria-label={`Ver detalles de ${entry.site}`}
+        onClick={onOpen}
+      >
+        <span className="card-site">{entry.site}</span>
+      </button>
     </article>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Entry form modal (vault-ui "Form validation").
+// Entry modal — one modal for viewing details (editable), creating a new entry
+// and editing an existing one. Shows the six fields as a form; copy controls
+// appear only for an existing entry (link, password, email, username — never
+// the category), and delete only for an existing entry.
 // ---------------------------------------------------------------------------
 
-export interface EntryFormModalProps {
+export interface EntryModalProps {
   open: boolean;
-  /** Entry being edited, or null for a new entry. */
+  /** Entry being viewed/edited, or null for a new entry. */
   initial: EntrySummary | null;
+  /** Decrypted password for an existing entry (prefill); empty for new. */
   initialPassword?: string;
   onSave: (input: EntryInput) => void;
   onCancel: () => void;
+  /** Copy a secret field — wired only for an existing entry. */
+  onCopy?: (field: CopyField) => void;
+  /** Delete the entry — wired only for an existing entry. */
+  onDelete?: () => void;
 }
 
 interface FieldErrors {
@@ -180,15 +140,16 @@ interface FieldErrors {
   password?: string;
 }
 
-/** Modal with the six entry fields. Submitting with a missing required field
- *  keeps the modal open and shows a Spanish validation message. */
-export function EntryFormModal({
+/** The unified entry sheet: create, view and edit share one modal. */
+export function EntryModal({
   open,
   initial,
   initialPassword = "",
   onSave,
   onCancel,
-}: EntryFormModalProps) {
+  onCopy,
+  onDelete,
+}: EntryModalProps) {
   const [site, setSite] = useState(initial?.site ?? "");
   const [link, setLink] = useState(initial?.link ?? "");
   const [password, setPassword] = useState(initialPassword);
@@ -196,6 +157,7 @@ export function EntryFormModal({
   const [username, setUsername] = useState(initial?.username ?? "");
   const [category, setCategory] = useState(initial?.category ?? CATEGORIES[0]);
   const [errors, setErrors] = useState<FieldErrors>({});
+  const isExisting = initial !== null;
 
   if (!open) return null;
 
@@ -219,83 +181,128 @@ export function EntryFormModal({
 
   return (
     <div className="modal-overlay" role="presentation">
-      <form className="modal" role="dialog" aria-modal="true" aria-label="Formulario de entrada" onSubmit={handleSubmit}>
-        <h2>{initial ? "Editar entrada" : "Nueva entrada"}</h2>
+      <form
+        className="modal details-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Formulario de entrada"
+        onSubmit={handleSubmit}
+      >
+        <div className="details-head">
+          <h2>{initial ? "Editar entrada" : "Nueva entrada"}</h2>
+          <button type="button" className="icon-button" aria-label="Cerrar" onClick={onCancel}>
+            <X size={18} />
+          </button>
+        </div>
 
-        <label htmlFor="field-site">
-          Sitio *
-          <input
-            id="field-site"
-            value={site}
-            onChange={(event) => setSite(event.target.value)}
-            aria-invalid={Boolean(errors.site)}
-          />
-        </label>
-        {errors.site && (
-          <p className="field-error" role="alert">
-            {errors.site}
-          </p>
-        )}
+        <div className="field-control">
+          <label htmlFor="field-site">Sitio *</label>
+          <div className="field-row-inline">
+            <input
+              id="field-site"
+              value={site}
+              onChange={(event) => setSite(event.target.value)}
+              aria-invalid={Boolean(errors.site)}
+            />
+          </div>
+          {errors.site && (
+            <p className="field-error" role="alert">
+              {errors.site}
+            </p>
+          )}
+        </div>
 
-        <label htmlFor="field-link">
-          Enlace
-          <input
-            id="field-link"
-            value={link}
-            onChange={(event) => setLink(event.target.value)}
-          />
-        </label>
+        <div className="field-control">
+          <label htmlFor="field-link">Enlace</label>
+          <div className="field-row-inline">
+            <input
+              id="field-link"
+              value={link}
+              onChange={(event) => setLink(event.target.value)}
+            />
+            {isExisting && onCopy && (
+              <CopyButton label="Copiar enlace" onCopy={() => onCopy("link")} />
+            )}
+          </div>
+        </div>
 
-        <label htmlFor="field-password">
-          Contraseña *
-          <input
-            id="field-password"
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            aria-invalid={Boolean(errors.password)}
-          />
-        </label>
-        {errors.password && (
-          <p className="field-error" role="alert">
-            {errors.password}
-          </p>
-        )}
+        <div className="field-control">
+          <label htmlFor="field-password">Contraseña *</label>
+          <div className="field-row-inline">
+            <input
+              id="field-password"
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              aria-invalid={Boolean(errors.password)}
+            />
+            {isExisting && onCopy && (
+              <CopyButton label="Copiar contraseña" onCopy={() => onCopy("password")} />
+            )}
+          </div>
+          {errors.password && (
+            <p className="field-error" role="alert">
+              {errors.password}
+            </p>
+          )}
+        </div>
 
-        <label htmlFor="field-email">
-          Correo
-          <input
-            id="field-email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-          />
-        </label>
+        <div className="field-control">
+          <label htmlFor="field-email">Correo</label>
+          <div className="field-row-inline">
+            <input
+              id="field-email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+            />
+            {isExisting && onCopy && (
+              <CopyButton label="Copiar correo" onCopy={() => onCopy("email")} />
+            )}
+          </div>
+        </div>
 
-        <label htmlFor="field-username">
-          Usuario
-          <input
-            id="field-username"
-            value={username}
-            onChange={(event) => setUsername(event.target.value)}
-          />
-        </label>
+        <div className="field-control">
+          <label htmlFor="field-username">Usuario</label>
+          <div className="field-row-inline">
+            <input
+              id="field-username"
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+            />
+            {isExisting && onCopy && (
+              <CopyButton label="Copiar usuario" onCopy={() => onCopy("username")} />
+            )}
+          </div>
+        </div>
 
-        <label htmlFor="field-category">
-          Categoría
-          <select
-            id="field-category"
-            value={category}
-            onChange={(event) => setCategory(event.target.value)}
-          >
-            {CATEGORIES.map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="field-control">
+          <label htmlFor="field-category">Categoría</label>
+          <div className="field-row-inline">
+            <select
+              id="field-category"
+              value={category}
+              onChange={(event) => setCategory(event.target.value)}
+            >
+              {CATEGORIES.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
 
         <div className="modal-actions">
+          {isExisting && onDelete && (
+            <button
+              type="button"
+              className="icon-button danger"
+              aria-label="Eliminar"
+              onClick={onDelete}
+            >
+              <Trash2 size={16} />
+            </button>
+          )}
           <button type="submit" className="action-button primary">
             Guardar
           </button>
@@ -351,50 +358,124 @@ export interface SearchFiltersProps {
   onChange: (next: Filters) => void;
 }
 
-/** Site search plus category and email selects, all conjunctive. The email
- *  options come from the backend so the selector stays complete even while a
- *  filter shrinks the loaded entries. */
+interface FilterOption {
+  value: string;
+  label: string;
+}
+
+/** Icon-triggered dropdown (listbox) for a single conjunctive filter. */
+function FilterListbox({
+  triggerLabel,
+  emptyLabel,
+  value,
+  options,
+  onChange,
+  icon,
+}: {
+  triggerLabel: string;
+  emptyLabel: string;
+  value: string | null;
+  options: FilterOption[];
+  onChange: (value: string | null) => void;
+  icon: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocMouseDown(event: MouseEvent) {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDocMouseDown);
+    return () => document.removeEventListener("mousedown", onDocMouseDown);
+  }, [open]);
+
+  const isActive = value !== null;
+
+  return (
+    <div className="filter-menu" ref={rootRef}>
+      <button
+        type="button"
+        className={`icon-button filter-trigger${isActive ? " active" : ""}`}
+        aria-label={triggerLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((previous) => !previous)}
+      >
+        {icon}
+        {isActive && <span className="filter-dot" aria-hidden="true" />}
+      </button>
+      {open && (
+        <div className="filter-listbox" role="listbox" aria-label={triggerLabel}>
+          <button
+            type="button"
+            role="option"
+            aria-selected={value === null}
+            className={`filter-option${value === null ? " selected" : ""}`}
+            onClick={() => {
+              onChange(null);
+              setOpen(false);
+            }}
+          >
+            {emptyLabel}
+          </button>
+          {options.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              role="option"
+              aria-selected={value === option.value}
+              className={`filter-option${value === option.value ? " selected" : ""}`}
+              onClick={() => {
+                onChange(option.value);
+                setOpen(false);
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Site searchbox plus category and email dropdowns, all conjunctive. The
+ *  email options come from the backend so the selector stays complete even
+ *  while a filter shrinks the loaded entries. */
 export function SearchFilters({ filters, emails, onChange }: SearchFiltersProps) {
   return (
     <div className="filters">
-      <input
-        type="search"
-        className="filter-input"
-        placeholder="Buscar por sitio…"
-        aria-label="Buscar por sitio"
-        value={filters.site ?? ""}
-        onChange={(event) => onChange({ ...filters, site: event.target.value || null })}
+      <div className="search-shell">
+        <Search size={16} className="search-icon" aria-hidden="true" />
+        <input
+          type="search"
+          className="filter-input searchbox"
+          placeholder="Buscar por sitio…"
+          aria-label="Buscar por sitio"
+          value={filters.site ?? ""}
+          onChange={(event) => onChange({ ...filters, site: event.target.value || null })}
+        />
+      </div>
+      <FilterListbox
+        triggerLabel="Filtrar por categoría"
+        emptyLabel="Todas las categorías"
+        value={filters.category ?? null}
+        options={CATEGORIES.map((category) => ({ value: category, label: category }))}
+        onChange={(category) => onChange({ ...filters, category })}
+        icon={<ListFilter size={17} />}
       />
-      <select
-        className="filter-input"
-        aria-label="Filtrar por categoría"
-        value={filters.category ?? ""}
-        onChange={(event) =>
-          onChange({ ...filters, category: event.target.value || null })
-        }
-      >
-        <option value="">Todas las categorías</option>
-        {CATEGORIES.map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
-      <select
-        className="filter-input"
-        aria-label="Filtrar por correo"
-        value={filters.email ?? ""}
-        onChange={(event) =>
-          onChange({ ...filters, email: event.target.value || null })
-        }
-      >
-        <option value="">Todos los correos</option>
-        {emails.map((email) => (
-          <option key={email} value={email}>
-            {email}
-          </option>
-        ))}
-      </select>
+      <FilterListbox
+        triggerLabel="Filtrar por correo"
+        emptyLabel="Todos los correos"
+        value={filters.email ?? null}
+        options={emails.map((email) => ({ value: email, label: email }))}
+        onChange={(email) => onChange({ ...filters, email })}
+        icon={<AtSign size={17} />}
+      />
     </div>
   );
 }
