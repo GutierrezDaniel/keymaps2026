@@ -17,6 +17,6 @@ fn main() {
 #[cfg(not(feature = "tauri-app"))]
 fn main() {
     eprintln!(
-        "keymaps2026: the desktop shell is disabled. Build with `--features tauri-app` to run the app."
+        "clavemaestra: the desktop shell is disabled. Build with `--features tauri-app` to run the app."
     );
 }
