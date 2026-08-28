@@ -1,4 +1,4 @@
-# Keymaps2026 — Personal Password Manager
+# Clavemaestra — Personal Password Manager
 
 A personal, offline password manager: a Tauri v2 desktop app with a Rust
 hexagonal core, SQLite vault storage, and a Spanish React/TypeScript UI.

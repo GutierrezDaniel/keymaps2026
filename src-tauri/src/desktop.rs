@@ -11,5 +11,5 @@
 pub fn run() {
     crate::adapters::tauri::build(tauri::Builder::default())
         .run(tauri::generate_context!())
-        .expect("error while running keymaps2026");
+        .expect("error while running clavemaestra");
 }

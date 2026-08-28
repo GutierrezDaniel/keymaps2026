@@ -59,8 +59,8 @@ than a hidden risk.
 
 ## Brand Commitments
 
-- The name "Keymaps2026" is a **working name**, not final identity — the visual
-  identity must not be locked to it.
+- The product is named **Clavemaestra** — the master key that unlocks the
+  vault. The visual identity is built around that name and its key mark.
 - UI copy is Spanish (neutral professional register).
 - Repository is public on GitHub; no secrets or personal data may appear in
   the codebase or its history.

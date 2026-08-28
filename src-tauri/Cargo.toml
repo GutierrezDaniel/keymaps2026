@@ -14,7 +14,7 @@ name = "keymaps2026_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "keymaps2026"
+name = "clavemaestra"
 path = "src/main.rs"
 
 [features]

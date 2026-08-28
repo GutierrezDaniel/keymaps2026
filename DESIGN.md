@@ -12,8 +12,8 @@ built world (finish documentation), not from an intent before it.
 The vault is a classified codebook: cream security paper, ink, fountain-pen
 blue, and classified-red rubber stamps. The irreversible master-password
 contract is the product, so it is communicated as a physical seal, never as a
-generic banner. The name "Keymaps2026" is a working name; the identity is not
-bound to it.
+generic banner. The product is named **Clavemaestra** (the master key); the
+visual identity is built around that name and its key mark.
 
 ## Color
 
