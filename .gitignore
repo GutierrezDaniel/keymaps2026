@@ -162,3 +162,4 @@ backup*.db
 
 # Impeccable review artifacts (local only)
 .impeccable/
+.impeccable/
