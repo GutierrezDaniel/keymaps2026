@@ -508,7 +508,7 @@ export default function App() {
   if (phase === "booting") {
     return (
       <div className="app-shell">
-        <h1 className="app-title">Keymaps2026 — Administrador de Contraseñas</h1>
+        <h1 className="app-title">Administrador de Contraseñas</h1>
         <p>Cargando…</p>
       </div>
     );
@@ -517,7 +517,7 @@ export default function App() {
   if (phase === "create") {
     return (
       <div className="app-shell">
-        <h1 className="app-title">Keymaps2026 — Administrador de Contraseñas</h1>
+        <h1 className="app-title">Administrador de Contraseñas</h1>
         <CreateScreen error={error} onCreated={handleCreated} />
       </div>
     );
