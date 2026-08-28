@@ -2,33 +2,33 @@
 
 ## Purpose
 
-Define the Spanish user experience for entry cards, forms, secret masking, confirmations, and irreversible-loss warnings.
+Define the Spanish user experience for entry cards, the unified entry modal, secret masking, confirmations, and irreversible-loss warnings.
 
 ## Requirements
 
 ### Requirement: Spanish entry cards
 
-The user interface MUST present entries as cards with Spanish labels and MUST provide a flip animation that reveals site name, link, password, email, username, and category on the detail side.
+The interface MUST present entries as summary cards with the site name and a category color chip, and MUST open the unified entry modal when the card is activated.
 
-#### Scenario: Flip an entry card
+#### Scenario: Open an entry from a card
 
-- GIVEN an unlocked entry card
-- WHEN the user activates the card flip
-- THEN the detail side shows all six entry fields with Spanish labels
+- GIVEN an unlocked vault with entry cards
+- WHEN the user activates an entry card
+- THEN the unified entry modal opens showing the six entry fields with Spanish labels
 
-#### Scenario: Locked card
+#### Scenario: No plaintext on cards
 
-- GIVEN a locked vault
+- GIVEN a locked or unlocked vault with entry cards
 - WHEN entry cards are displayed
-- THEN plaintext secrets are not displayed and the locked state is clear
+- THEN plaintext secrets are not displayed on the cards and the locked state is clear
 
-### Requirement: Password masking and copying
+### Requirement: Password masking and revealing
 
-The password MUST be masked by default on the detail side and MUST have an explicit reveal/hide toggle. Copy controls MAY be offered only for link, password, email, and username.
+The password MUST be masked by default in the entry modal and MUST have an explicit reveal/hide toggle. Copy controls MAY be offered only for link, password, email, and username.
 
 #### Scenario: Reveal and hide a password
 
-- GIVEN a flipped entry card with a password
+- GIVEN the entry modal with a password
 - WHEN the user activates reveal and then hide
 - THEN the password is shown only while revealed and returns to masked form
 
@@ -37,6 +37,34 @@ The password MUST be masked by default on the detail side and MUST have an expli
 - GIVEN a displayed category field
 - WHEN the user inspects available copy controls
 - THEN no copy control is provided for the category
+
+### Requirement: Unified entry modal
+
+The entry modal MUST serve viewing, creating, and editing entries with the same sheet, MUST reset its fields each time it opens (a new entry starts empty, an edit starts from the entry's values), and MUST close when the entry it shows is deleted.
+
+#### Scenario: New entry starts empty
+
+- GIVEN a previous new-entry form was filled and saved
+- WHEN the user opens the new-entry modal again
+- THEN all fields are empty
+
+#### Scenario: Edit prefills the entry
+
+- GIVEN an existing entry
+- WHEN the user opens the entry in the modal
+- THEN the six fields are prefilled with the entry's values, including the decrypted password
+
+#### Scenario: Delete closes the modal
+
+- GIVEN the entry modal showing an existing entry
+- WHEN the user confirms deletion of that entry
+- THEN the modal closes after the entry is removed
+
+#### Scenario: Category picker
+
+- GIVEN the entry modal
+- WHEN the user opens the category picker
+- THEN the category options are displayed as a themed dropdown list and selecting one updates the entry category
 
 ### Requirement: Spanish irreversible-loss warnings
 

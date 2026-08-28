@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Keymaps2026 — Administrador de Contraseñas",
+        "title": "Administrador de Contraseñas",
         "width": 1100,
         "height": 760
       }

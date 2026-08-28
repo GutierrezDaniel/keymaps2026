@@ -1,13 +1,14 @@
-// Component tests for the Spanish UI pieces (vault-ui): card flip with the
-// six Spanish labels, password masking with reveal/hide, no copy control for
-// the category, form validation messages, delete confirmation, and the login
-// backoff countdown.
+// Component tests for the Spanish UI pieces (vault-ui): summary card with the
+// category color chip, the details modal with the six Spanish labels and icon
+// actions, password masking with reveal/hide, no copy control for the
+// category, form validation messages, delete confirmation, the searchbox with
+// dropdown filters, and the login backoff countdown.
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, within, act } from "@testing-library/react";
-import type { EntrySummary, EntryDetails } from "./api";
+import type { EntrySummary } from "./api";
 import {
   EntryCard,
-  EntryFormModal,
+  EntryModal,
   DeleteConfirm,
   BackoffNotice,
   MaskedPassword,
@@ -23,19 +24,22 @@ const SUMMARY: EntrySummary = {
   category: "trabajo",
 };
 
-const DETAILS: EntryDetails = { summary: SUMMARY, password: "s3cr3t" };
-
 function renderCard(overrides: Partial<Parameters<typeof EntryCard>[0]> = {}) {
   return render(
-    <EntryCard
-      entry={SUMMARY}
-      details={DETAILS}
-      flipped={false}
-      onToggleFlip={() => undefined}
+    <EntryCard entry={SUMMARY} onOpen={() => undefined} {...overrides} />,
+  );
+}
+
+function renderDetailsModal() {
+  return render(
+    <EntryModal
+      open
+      initial={SUMMARY}
+      initialPassword="s3cr3t"
+      onSave={() => undefined}
+      onCancel={() => undefined}
       onCopy={() => undefined}
-      onEdit={() => undefined}
       onDelete={() => undefined}
-      {...overrides}
     />,
   );
 }
@@ -44,63 +48,122 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("EntryCard — Spanish labels and flip", () => {
-  it("shows the site and category on the front side", () => {
+describe("EntryCard — summary card and category color chip", () => {
+  it("shows only the site name and carries the category as a color chip", () => {
     renderCard();
-    expect(screen.getByRole("heading", { name: "GitHub" })).toBeTruthy();
-    const front = screen.getByRole("heading", { name: "GitHub" }).closest(".card-front") as HTMLElement;
-    expect(within(front).getByText("trabajo")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Ver detalles" })).toBeTruthy();
+    const card = screen.getByTestId("entry-card");
+    expect(within(card).getByText("GitHub")).toBeTruthy();
+    expect(card.getAttribute("data-category")).toBe("trabajo");
+    expect(screen.getByRole("button", { name: "Ver detalles de GitHub" })).toBeTruthy();
   });
 
-  it("flips to a detail side with all six fields labeled in Spanish", () => {
-    renderCard({ flipped: true });
-    const back = screen.getByText("Sitio").closest(".card-back") as HTMLElement;
-    for (const label of ["Sitio", "Enlace", "Contraseña", "Correo", "Usuario", "Categoría"]) {
-      expect(within(back).getByText(label)).toBeTruthy();
-    }
-    expect(within(back).getByText("GitHub")).toBeTruthy();
-    expect(within(back).getByText("https://github.com")).toBeTruthy();
-    expect(within(back).getByText("ana@example.com")).toBeTruthy();
-    expect(within(back).getByText("ana")).toBeTruthy();
-    expect(within(back).getByRole("button", { name: "Ver resumen" })).toBeTruthy();
-  });
-
-  it("hides plaintext secrets on the front side", () => {
+  it("hides plaintext secrets on the summary card", () => {
     renderCard();
     expect(screen.queryByText("s3cr3t")).toBeNull();
+    expect(screen.queryByText("ana@example.com")).toBeNull();
+  });
+
+  it("calls onOpen when the card is activated", () => {
+    const onOpen = vi.fn();
+    renderCard({ onOpen });
+    fireEvent.click(screen.getByRole("button", { name: "Ver detalles de GitHub" }));
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the card's bounding rect as the modal morph origin", () => {
+    const onOpen = vi.fn();
+    renderCard({ onOpen });
+    fireEvent.click(screen.getByRole("button", { name: "Ver detalles de GitHub" }));
+    const origin = onOpen.mock.calls[0][0] as DOMRect | null;
+    expect(origin).not.toBeNull();
+    expect(origin).toHaveProperty("width");
+    expect(origin).toHaveProperty("height");
+  });
+
+  it("marks the card as the morph origin when requested", () => {
+    renderCard({ morphOrigin: true });
+    const card = screen.getByTestId("entry-card");
+    expect(card.classList.contains("morph-origin")).toBe(true);
   });
 });
 
-describe("EntryCard — password masking", () => {
-  it("masks the password by default on the detail side", () => {
-    renderCard({ flipped: true });
-    const value = screen.getByLabelText("Valor de la contraseña");
-    expect(value.textContent).not.toContain("s3cr3t");
-    expect(value.textContent).toContain("•");
+describe("EntryModal — unified create/view/edit sheet", () => {
+  it("shows all six fields labeled in Spanish for an existing entry", () => {
+    renderDetailsModal();
+    const dialog = screen.getByRole("dialog", { name: "Formulario de entrada" });
+    for (const label of ["Sitio *", "Enlace", "Contraseña *", "Correo", "Usuario", "Categoría"]) {
+      expect(within(dialog).getByText(label)).toBeTruthy();
+    }
+    expect(screen.getByRole("heading", { name: "Editar entrada" })).toBeTruthy();
+    expect(screen.getByLabelText(/Sitio/)).toHaveProperty("value", "GitHub");
+    expect(screen.getByLabelText(/Enlace/)).toHaveProperty("value", "https://github.com");
+    expect(screen.getByLabelText(/Correo/)).toHaveProperty("value", "ana@example.com");
+    expect(screen.getByLabelText(/Usuario/)).toHaveProperty("value", "ana");
   });
 
-  it("reveals the password with Mostrar and hides it again with Ocultar", () => {
-    renderCard({ flipped: true });
+  it("hides plaintext secrets until the password is revealed", () => {
+    renderDetailsModal();
+    expect(screen.getByLabelText(/Contraseña/)).toHaveProperty("type", "password");
+    expect(screen.getByLabelText(/Contraseña/)).toHaveProperty("value", "s3cr3t");
+  });
+
+  it("toggles the password visibility with the reveal icon", () => {
+    renderDetailsModal();
+    const input = screen.getByLabelText(/Contraseña/);
+    expect(input).toHaveProperty("type", "password");
+
     fireEvent.click(screen.getByRole("button", { name: "Mostrar" }));
-    expect(screen.getByLabelText("Valor de la contraseña").textContent).toBe("s3cr3t");
+    expect(screen.getByLabelText(/Contraseña/)).toHaveProperty("type", "text");
+
     fireEvent.click(screen.getByRole("button", { name: "Ocultar" }));
-    expect(screen.getByLabelText("Valor de la contraseña").textContent).not.toContain(
-      "s3cr3t",
+    expect(screen.getByLabelText(/Contraseña/)).toHaveProperty("type", "password");
+  });
+
+  it("starts an existing entry prefilled and a new entry empty", () => {
+    const { rerender } = render(
+      <EntryModal open initial={SUMMARY} initialPassword="s3cr3t" onSave={() => undefined} onCancel={() => undefined} />,
     );
+    expect(screen.getByLabelText(/Sitio/)).toHaveProperty("value", "GitHub");
+
+    // Closing and reopening for a new entry must not leak the previous values.
+    rerender(<EntryModal open={false} initial={null} onSave={() => undefined} onCancel={() => undefined} />);
+    rerender(<EntryModal open initial={null} onSave={() => undefined} onCancel={() => undefined} />);
+    expect(screen.getByLabelText(/Sitio/)).toHaveProperty("value", "");
+    expect(screen.getByLabelText(/Contraseña/)).toHaveProperty("value", "");
+  });
+
+  it("offers icon copy controls for link, password, email and username", () => {
+    renderDetailsModal();
+    expect(screen.getByRole("button", { name: "Copiar enlace" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copiar contraseña" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copiar correo" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copiar usuario" })).toBeTruthy();
   });
 
   it("never offers a copy control for the category field", () => {
-    renderCard({ flipped: true });
-    const categoryRow = screen.getByText("Categoría").closest(".field-row") as HTMLElement;
-    expect(within(categoryRow).queryByRole("button")).toBeNull();
+    renderDetailsModal();
+    const categoryRow = screen.getByText("Categoría").closest(".field-control") as HTMLElement;
+    expect(within(categoryRow).queryByRole("button", { name: /Copiar/ })).toBeNull();
+  });
+
+  it("exposes delete and close as icon actions for an existing entry", () => {
+    renderDetailsModal();
+    expect(screen.getByRole("button", { name: "Eliminar" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Cerrar" })).toBeTruthy();
+  });
+
+  it("does not offer copy or delete actions for a new entry", () => {
+    render(<EntryModal open initial={null} onSave={() => undefined} onCancel={() => undefined} />);
+    expect(screen.getByRole("heading", { name: "Nueva entrada" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Copiar contraseña" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Eliminar" })).toBeNull();
   });
 });
 
-describe("EntryFormModal — Spanish validation", () => {
+describe("EntryModal — Spanish validation", () => {
   it("keeps the modal open and shows a Spanish message for a missing required field", () => {
     const onSave = vi.fn();
-    render(<EntryFormModal open initial={null} onSave={onSave} onCancel={() => undefined} />);
+    render(<EntryModal open initial={null} onSave={onSave} onCancel={() => undefined} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Guardar" }));
 
@@ -112,7 +175,7 @@ describe("EntryFormModal — Spanish validation", () => {
 
   it("submits a valid form with the six field values", () => {
     const onSave = vi.fn();
-    render(<EntryFormModal open initial={null} onSave={onSave} onCancel={() => undefined} />);
+    render(<EntryModal open initial={null} onSave={onSave} onCancel={() => undefined} />);
 
     fireEvent.change(screen.getByLabelText(/Sitio/), { target: { value: "GitLab" } });
     fireEvent.change(screen.getByLabelText(/Enlace/), {
@@ -123,7 +186,9 @@ describe("EntryFormModal — Spanish validation", () => {
       target: { value: "ana@example.com" },
     });
     fireEvent.change(screen.getByLabelText(/Usuario/), { target: { value: "ana" } });
-    fireEvent.change(screen.getByLabelText(/Categoría/), { target: { value: "estudio" } });
+    // The category picker is a themed listbox: open it and pick an option.
+    fireEvent.click(screen.getByLabelText(/Categoría/));
+    fireEvent.click(screen.getByRole("option", { name: "estudio" }));
     fireEvent.click(screen.getByRole("button", { name: "Guardar" }));
 
     expect(onSave).toHaveBeenCalledWith({
@@ -137,8 +202,8 @@ describe("EntryFormModal — Spanish validation", () => {
   });
 });
 
-describe("SearchFilters — site search and email/category selects", () => {
-  it("sends the typed site value as a filter", () => {
+describe("SearchFilters — site searchbox and icon-triggered dropdowns", () => {
+  it("sends the typed site value as a filter from the searchbox", () => {
     const onChange = vi.fn();
     render(<SearchFilters filters={{}} emails={[]} onChange={onChange} />);
 
@@ -146,50 +211,6 @@ describe("SearchFilters — site search and email/category selects", () => {
       target: { value: "GitHub" },
     });
     expect(onChange).toHaveBeenLastCalledWith({ site: "GitHub" });
-  });
-
-  it("renders the email select with every provided email and the all-emails option", () => {
-    render(
-      <SearchFilters
-        filters={{}}
-        emails={["ana@example.com", "bob@example.com"]}
-        onChange={() => undefined}
-      />,
-    );
-
-    const emailSelect = screen.getByLabelText("Filtrar por correo") as HTMLSelectElement;
-    expect(emailSelect.tagName).toBe("SELECT");
-    expect(screen.getByRole("option", { name: "Todos los correos" })).toBeTruthy();
-    expect(screen.getByRole("option", { name: "ana@example.com" })).toBeTruthy();
-    expect(screen.getByRole("option", { name: "bob@example.com" })).toBeTruthy();
-  });
-
-  it("emits the selected email as a filter", () => {
-    const onChange = vi.fn();
-    render(
-      <SearchFilters filters={{}} emails={["ana@example.com"]} onChange={onChange} />,
-    );
-
-    fireEvent.change(screen.getByLabelText("Filtrar por correo"), {
-      target: { value: "ana@example.com" },
-    });
-    expect(onChange).toHaveBeenLastCalledWith({ email: "ana@example.com" });
-  });
-
-  it("emits null for the email filter when Todos los correos is selected", () => {
-    const onChange = vi.fn();
-    render(
-      <SearchFilters
-        filters={{ site: "GitHub", email: "ana@example.com" }}
-        emails={["ana@example.com"]}
-        onChange={onChange}
-      />,
-    );
-
-    fireEvent.change(screen.getByLabelText("Filtrar por correo"), {
-      target: { value: "" },
-    });
-    expect(onChange).toHaveBeenCalledWith({ site: "GitHub", email: null });
   });
 
   it("sends null instead of an empty string when the site filter is cleared", () => {
@@ -204,6 +225,63 @@ describe("SearchFilters — site search and email/category selects", () => {
 
     fireEvent.change(screen.getByLabelText("Buscar por sitio"), { target: { value: "" } });
     expect(onChange).toHaveBeenCalledWith({ site: null, email: "ana@example.com" });
+  });
+
+  it("opens the email dropdown with every provided email and the all-emails option", () => {
+    render(
+      <SearchFilters
+        filters={{}}
+        emails={["ana@example.com", "bob@example.com"]}
+        onChange={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Filtrar por correo" }));
+
+    const listbox = screen.getByRole("listbox", { name: "Filtrar por correo" });
+    expect(within(listbox).getByRole("option", { name: "Todos los correos" })).toBeTruthy();
+    expect(within(listbox).getByRole("option", { name: "ana@example.com" })).toBeTruthy();
+    expect(within(listbox).getByRole("option", { name: "bob@example.com" })).toBeTruthy();
+  });
+
+  it("emits the selected email as a filter", () => {
+    const onChange = vi.fn();
+    render(
+      <SearchFilters filters={{}} emails={["ana@example.com"]} onChange={onChange} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Filtrar por correo" }));
+    fireEvent.click(screen.getByRole("option", { name: "ana@example.com" }));
+
+    expect(onChange).toHaveBeenLastCalledWith({ email: "ana@example.com" });
+  });
+
+  it("emits null for the email filter when Todos los correos is selected", () => {
+    const onChange = vi.fn();
+    render(
+      <SearchFilters
+        filters={{ site: "GitHub", email: "ana@example.com" }}
+        emails={["ana@example.com"]}
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Filtrar por correo" }));
+    fireEvent.click(screen.getByRole("option", { name: "Todos los correos" }));
+
+    expect(onChange).toHaveBeenCalledWith({ site: "GitHub", email: null });
+  });
+
+  it("opens the category dropdown with all four categories", () => {
+    render(<SearchFilters filters={{}} emails={[]} onChange={() => undefined} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Filtrar por categoría" }));
+
+    const listbox = screen.getByRole("listbox", { name: "Filtrar por categoría" });
+    expect(within(listbox).getByRole("option", { name: "Todas las categorías" })).toBeTruthy();
+    for (const category of ["entretenimiento", "trabajo", "estudio", "servicios"]) {
+      expect(within(listbox).getByRole("option", { name: category })).toBeTruthy();
+    }
   });
 });
 
@@ -255,7 +333,7 @@ describe("BackoffNotice — countdown surfacing", () => {
 });
 
 describe("MaskedPassword — masking contract", () => {
-  it("is masked by default and toggles with Mostrar/Ocultar", () => {
+  it("is masked by default and toggles with Mostrar/Ocultar icons", () => {
     render(<MaskedPassword value="s3cr3t" />);
     expect(screen.getByLabelText("Valor de la contraseña").textContent).toContain("•");
 

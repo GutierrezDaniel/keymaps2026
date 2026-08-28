@@ -1,7 +1,7 @@
 // App-level tests for the Spanish screens (vault-ui): boot resolution,
 // irreversible-loss warnings, vault creation (which does not auto-unlock),
-// login errors and backoff, explicit lock, auto-lock surfacing, card flip
-// details, copy, delete confirmation and the entry form save path.
+// login errors and backoff, explicit lock, auto-lock surfacing, details modal,
+// copy, delete confirmation and the entry form save path.
 //
 // The Tauri IPC module is mocked so everything runs headless in jsdom; the
 // typed client (`./api`) routes through the same mocked invoke.
@@ -59,11 +59,16 @@ async function reachLogin(): Promise<void> {
   await screen.findByLabelText("Contraseña maestra");
 }
 
+async function openDetailsModal(): Promise<void> {
+  fireEvent.click(screen.getByRole("button", { name: "Ver detalles de GitHub" }));
+  await screen.findByRole("dialog", { name: "Formulario de entrada" });
+}
+
 describe("App — boot resolution", () => {
-  it("shows the vault with entry cards when boot list succeeds", async () => {
+  it("shows the vault with summary cards when boot list succeeds", async () => {
     bootUnlocked();
     expect(await screen.findByRole("heading", { name: "Mi bóveda" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "GitHub" })).toBeTruthy();
+    expect(screen.getByText("GitHub")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Nueva entrada" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Bloquear" })).toBeTruthy();
   });
@@ -245,10 +250,10 @@ describe("App — unlocked vault interactions", () => {
     expect(mockedInvoke).toHaveBeenCalledWith("lock");
     expect(await screen.findByLabelText("Contraseña maestra")).toBeTruthy();
     expect(screen.getByText(/pérdida irreversible/i)).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: "Mi bóveda" })).toBeNull();
+    expect(screen.queryByText("GitHub")).toBeNull();
   });
 
-  it("fetches decrypted details on flip and keeps the password masked by default", async () => {
+  it("opens the unified entry modal on card click, fetches details and keeps the password masked", async () => {
     mockRoutes({
       list: () => [ENTRY],
       get_entry_details: () => DETAILS,
@@ -256,14 +261,13 @@ describe("App — unlocked vault interactions", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "Mi bóveda" });
 
-    fireEvent.click(screen.getByRole("button", { name: "Ver detalles" }));
+    await openDetailsModal();
 
     expect(mockedInvoke).toHaveBeenCalledWith("get_entry_details", { id: "id-1" });
-    const card = (await screen.findByText("Contraseña")).closest(".card-back") as HTMLElement;
-    expect(within(card).getByLabelText("Valor de la contraseña").textContent).toContain("•");
-    expect(within(card).getByLabelText("Valor de la contraseña").textContent).not.toContain(
-      "s3cr3t",
-    );
+    const dialog = screen.getByRole("dialog", { name: "Formulario de entrada" });
+    expect(within(dialog).getByRole("heading", { name: "Editar entrada" })).toBeTruthy();
+    expect(within(dialog).getByLabelText(/Contraseña/)).toHaveProperty("type", "password");
+    expect(within(dialog).getByLabelText(/Contraseña/)).toHaveProperty("value", "s3cr3t");
   });
 
   it("copies a field through the command surface and shows Copiado", async () => {
@@ -274,8 +278,7 @@ describe("App — unlocked vault interactions", () => {
     });
     render(<App />);
     await screen.findByRole("heading", { name: "Mi bóveda" });
-    fireEvent.click(screen.getByRole("button", { name: "Ver detalles" }));
-    await screen.findByText("Contraseña");
+    await openDetailsModal();
 
     fireEvent.click(screen.getByRole("button", { name: "Copiar contraseña" }));
 
@@ -283,7 +286,7 @@ describe("App — unlocked vault interactions", () => {
     expect(await screen.findByRole("button", { name: "Copiado" })).toBeTruthy();
   });
 
-  it("confirms deletion in Spanish and refreshes the list afterwards", async () => {
+  it("confirms deletion in Spanish, plays the leave animation and refreshes the list", async () => {
     let listResult: EntrySummary[] = [ENTRY];
     mockRoutes({
       list: () => listResult,
@@ -294,8 +297,7 @@ describe("App — unlocked vault interactions", () => {
     });
     render(<App />);
     await screen.findByRole("heading", { name: "Mi bóveda" });
-    fireEvent.click(screen.getByRole("button", { name: "Ver detalles" }));
-    await screen.findByText("Contraseña");
+    await openDetailsModal();
 
     fireEvent.click(screen.getByRole("button", { name: "Eliminar" }));
     expect(screen.getByText("¿Eliminar la entrada «GitHub»?")).toBeTruthy();
@@ -304,11 +306,15 @@ describe("App — unlocked vault interactions", () => {
     const confirmDialog = screen.getByRole("alertdialog");
     fireEvent.click(within(confirmDialog).getByRole("button", { name: "Eliminar" }));
 
-    expect(mockedInvoke).toHaveBeenCalledWith("delete", { id: "id-1" });
+    await waitFor(() =>
+      expect(mockedInvoke).toHaveBeenCalledWith("delete", { id: "id-1" }),
+    );
     expect(await screen.findByText(/Aún no hay entradas/)).toBeTruthy();
+    // The details modal must close once the entry is gone.
+    expect(screen.queryByRole("dialog", { name: "Formulario de entrada" })).toBeNull();
   });
 
-  it("pre-fills the edit form from the entry when editing", async () => {
+  it("pre-fills the unified modal from the entry when a card is opened", async () => {
     mockRoutes({
       list: () => [ENTRY],
       get_entry_details: () => DETAILS,
@@ -316,9 +322,7 @@ describe("App — unlocked vault interactions", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "Mi bóveda" });
 
-    fireEvent.click(screen.getByRole("button", { name: "Ver detalles" }));
-    await screen.findByText("Contraseña");
-    fireEvent.click(screen.getByRole("button", { name: "Editar" }));
+    await openDetailsModal();
 
     const dialog = screen.getByRole("dialog", { name: "Formulario de entrada" });
     expect(within(dialog).getByRole("heading", { name: "Editar entrada" })).toBeTruthy();
@@ -326,8 +330,8 @@ describe("App — unlocked vault interactions", () => {
     expect(within(dialog).getByLabelText(/Enlace/)).toHaveProperty("value", "https://github.com");
     expect(within(dialog).getByLabelText(/Correo/)).toHaveProperty("value", "ana@example.com");
     expect(within(dialog).getByLabelText(/Usuario/)).toHaveProperty("value", "ana");
-    expect(within(dialog).getByLabelText(/Categoría/)).toHaveProperty("value", "trabajo");
-    // The card was flipped before editing, so the decrypted password also
+    expect(within(dialog).getByLabelText(/Categoría/).textContent).toBe("trabajo");
+    // Details were fetched before editing, so the decrypted password also
     // pre-fills (initialPassword flows from the cached details).
     expect(within(dialog).getByLabelText(/Contraseña/)).toHaveProperty("value", "s3cr3t");
   });
@@ -362,7 +366,30 @@ describe("App — unlocked vault interactions", () => {
     );
   });
 
-  it("loads the distinct emails into the email filter when unlocked", async () => {
+  it("opens a clean new-entry form after a save (no stale inputs)", async () => {
+    mockRoutes({
+      list: () => [ENTRY],
+      create: () => "id-2",
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Nueva entrada" }));
+    fireEvent.change(screen.getByLabelText(/Sitio/), { target: { value: "GitLab" } });
+    fireEvent.change(screen.getByLabelText(/Contraseña/), { target: { value: "p4ss" } });
+    fireEvent.click(screen.getByRole("button", { name: "Guardar" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Formulario de entrada" })).toBeNull(),
+    );
+
+    // Reopen: the fields must be empty, not the previously typed values.
+    fireEvent.click(screen.getByRole("button", { name: "Nueva entrada" }));
+    expect(screen.getByRole("dialog", { name: "Formulario de entrada" })).toBeTruthy();
+    expect(screen.getByLabelText(/Sitio/)).toHaveProperty("value", "");
+    expect(screen.getByLabelText(/Contraseña/)).toHaveProperty("value", "");
+  });
+
+  it("loads the distinct emails into the email dropdown when unlocked", async () => {
     mockRoutes({
       list: () => [ENTRY],
       list_emails: () => ["ana@example.com", "bob@example.com"],
@@ -371,12 +398,14 @@ describe("App — unlocked vault interactions", () => {
     await screen.findByRole("heading", { name: "Mi bóveda" });
 
     expect(mockedInvoke).toHaveBeenCalledWith("list_emails");
-    expect(screen.getByRole("option", { name: "Todos los correos" })).toBeTruthy();
-    expect(screen.getByRole("option", { name: "ana@example.com" })).toBeTruthy();
-    expect(screen.getByRole("option", { name: "bob@example.com" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Filtrar por correo" }));
+    const listbox = screen.getByRole("listbox", { name: "Filtrar por correo" });
+    expect(within(listbox).getByRole("option", { name: "Todos los correos" })).toBeTruthy();
+    expect(within(listbox).getByRole("option", { name: "ana@example.com" })).toBeTruthy();
+    expect(within(listbox).getByRole("option", { name: "bob@example.com" })).toBeTruthy();
   });
 
-  it("filters the vault list when an email is selected in the filter", async () => {
+  it("filters the vault list when an email is selected in the dropdown", async () => {
     mockRoutes({
       list: (args) => {
         const filters = (args as { filters?: { email?: string | null } } | undefined)
@@ -389,9 +418,8 @@ describe("App — unlocked vault interactions", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "Mi bóveda" });
 
-    fireEvent.change(screen.getByLabelText("Filtrar por correo"), {
-      target: { value: "ana@example.com" },
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Filtrar por correo" }));
+    fireEvent.click(screen.getByRole("option", { name: "ana@example.com" }));
 
     expect(mockedInvoke).toHaveBeenCalledWith("list", {
       filters: { email: "ana@example.com" },
@@ -411,12 +439,11 @@ describe("App — unlocked vault interactions", () => {
     });
     render(<App />);
     await screen.findByRole("heading", { name: "Mi bóveda" });
-    fireEvent.click(screen.getByRole("button", { name: "Ver detalles" }));
-    await screen.findByText("Contraseña");
+    await openDetailsModal();
 
     fireEvent.click(screen.getByRole("button", { name: "Copiar contraseña" }));
 
     expect(await screen.findByLabelText("Contraseña maestra")).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: "GitHub" })).toBeNull();
+    expect(screen.queryByText("GitHub")).toBeNull();
   });
 });

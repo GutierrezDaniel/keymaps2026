@@ -9,11 +9,49 @@
 //   is how the Rust 5-minute auto-lock surfaces to the UI).
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import { Lock, Plus } from "lucide-react";
 import { api, toCommandError } from "./api";
 import type { EntrySummary, EntryDetails, EntryInput, Filters, CopyField, CommandError } from "./api";
-import { BackoffNotice, DeleteConfirm, EntryCard, EntryFormModal, SearchFilters } from "./components";
+import {
+  BackoffNotice,
+  DeleteConfirm,
+  EntryCard,
+  EntryModal,
+  SearchFilters,
+} from "./components";
 
 type Phase = "booting" | "create" | "locked" | "unlocked";
+
+/** View Transitions API, feature-detected. WebKitGTK versions used by Tauri
+ *  on Linux may lack it; every call degrades to the plain CSS fallback. */
+function supportsViewTransitions(): boolean {
+  return typeof document !== "undefined" && "startViewTransition" in document;
+}
+
+/** A minimal structural type for the View Transitions API surface we use. */
+interface ViewTransition {
+  finished: Promise<void>;
+}
+
+/** Wrap a state commit in a same-document view transition when the runtime
+ *  supports it; otherwise run the commit directly. The `phase` marker adds the
+ *  sheet fold/rise choreography (unlock/lock); modal morphs pass no marker.
+ *  An async commit is awaited by the transition before the "after" snapshot,
+ *  so phases that load data (unlock → vault) fold after the new page exists. */
+function withViewTransition(commit: () => void | Promise<void>, phase = false): void {
+  if (!supportsViewTransitions()) {
+    void commit();
+    return;
+  }
+  const root = document.documentElement;
+  if (phase) root.classList.add("phase-transition");
+  const transition = (document as Document & {
+    startViewTransition: (callback: () => void | Promise<void>) => ViewTransition;
+  }).startViewTransition(commit);
+  void transition.finished.finally(() => {
+    if (phase) root.classList.remove("phase-transition");
+  });
+}
 
 /** Map a typed command error to a Spanish user-facing message. */
 function spanishMessage(error: CommandError): string {
@@ -107,7 +145,8 @@ function CreateScreen({ error, onCreated }: CreateScreenProps) {
 
 // ---------------------------------------------------------------------------
 // Locked screen — login with the irreversible-loss warning (vault-ui "Locked-
-// state warning") and the backoff countdown (vault-session "Bounded login").
+// state warning") placed as a quiet note below the password input, and the
+// backoff countdown (vault-session "Bounded login").
 // ---------------------------------------------------------------------------
 
 interface LoginScreenProps {
@@ -129,11 +168,6 @@ function LoginScreen({ error, notice, backoff, onExpireBackoff, onUnlock }: Logi
   return (
     <div className="screen">
       <h2>Desbloquear bóveda</h2>
-      <p className="warning" role="alert">
-        <strong>Advertencia: pérdida irreversible</strong>
-        Si olvidas la contraseña maestra, perderás el acceso a la bóveda de forma permanente.
-        No existe ningún mecanismo de recuperación.
-      </p>
       <form onSubmit={handleSubmit}>
         <label htmlFor="master-password">
           Contraseña maestra
@@ -157,6 +191,11 @@ function LoginScreen({ error, notice, backoff, onExpireBackoff, onUnlock }: Logi
           Desbloquear
         </button>
       </form>
+      <p className="warning quiet" role="alert">
+        <strong>Advertencia: pérdida irreversible</strong>
+        Si olvidas la contraseña maestra, perderás el acceso a la bóveda de forma permanente.
+        No existe ningún mecanismo de recuperación.
+      </p>
     </div>
   );
 }
@@ -171,13 +210,20 @@ export default function App() {
   const [emails, setEmails] = useState<string[]>([]);
   const [filters, setFilters] = useState<Filters>({});
   const [details, setDetails] = useState<Record<string, EntryDetails>>({});
-  const [flipped, setFlipped] = useState<Record<string, boolean>>({});
+  const [leavingId, setLeavingId] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<EntrySummary | null>(null);
   const [deleting, setDeleting] = useState<EntrySummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [backoff, setBackoff] = useState<number | null>(null);
+  /** Id of the card serving as the morph origin for the details modal. While
+   *  set, that card shares the modal's view-transition name so the browser
+   *  morphs card → modal (and back) instead of cross-fading. */
+  const [morphOriginId, setMorphOriginId] = useState<string | null>(null);
+  /** True while the details modal is morphing (View Transitions active), so
+   *  the sheet suppresses its CSS flip-in and lets the transition own motion. */
+  const [morphActive, setMorphActive] = useState(false);
 
   const filtersRef = useRef<Filters>({});
   const editingRef = useRef<EntrySummary | null>(null);
@@ -188,10 +234,12 @@ export default function App() {
     setEntries([]);
     setEmails([]);
     setDetails({});
-    setFlipped({});
+    setLeavingId(null);
     setEditing(null);
     setDeleting(null);
     setFormOpen(false);
+    setMorphOriginId(null);
+    setMorphActive(false);
     setNotice(null);
   }
 
@@ -217,7 +265,7 @@ export default function App() {
       const list = await api.list(f);
       setEntries(list);
       setDetails({});
-      setFlipped({});
+      setLeavingId(null);
       setPhase("unlocked");
       void loadEmails();
     } catch (raw) {
@@ -280,7 +328,8 @@ export default function App() {
     try {
       await api.unlock(password);
       setNotice(null);
-      await applyList(filtersRef.current);
+      // Breaking the seal: the locked sheet folds away and the vault rises.
+      withViewTransition(() => applyList(filtersRef.current), true);
     } catch (raw) {
       const commandError = toCommandError(raw);
       if (commandError.kind === "Backoff") {
@@ -305,7 +354,8 @@ export default function App() {
     } catch {
       // Locking is best-effort; the screen still locks.
     }
-    lockScreen();
+    // The sheet folds back to the locked page like closing the codebook.
+    withViewTransition(() => lockScreen(), true);
   }
 
   function handleFiltersChange(next: Filters) {
@@ -314,20 +364,47 @@ export default function App() {
     void applyList(next);
   }
 
-  async function handleToggleFlip(id: string) {
-    setFlipped((previous) => ({ ...previous, [id]: !previous[id] }));
-    if (!details[id]) {
+  /** Open the unified entry modal for an existing entry, fetching the
+   *  decrypted details (password prefill) on the first open. The card that
+   *  was clicked becomes the morph origin for the details sheet. */
+  async function openEditEntry(entry: EntrySummary, origin: DOMRect | null) {
+    setError(null);
+    if (!details[entry.id]) {
       try {
-        const entryDetails = await api.getEntryDetails(id);
-        setDetails((previous) => ({ ...previous, [id]: entryDetails }));
+        const entryDetails = await api.getEntryDetails(entry.id);
+        setDetails((previous) => ({ ...previous, [entry.id]: entryDetails }));
       } catch (raw) {
         const commandError = toCommandError(raw);
         if (commandError.kind === "Locked") {
           lockScreen();
-        } else {
-          setError(spanishMessage(commandError));
+          return;
         }
+        setError(spanishMessage(commandError));
+        return;
       }
+    }
+    if (origin && supportsViewTransitions()) {
+      // The morph origin must be painted BEFORE the transition captures the
+      // "from" snapshot, so the browser sees the card in the old state and
+      // the modal in the new one — that shared identity is what it morphs.
+      // The origin id is cleared inside the commit: only the card may carry
+      // the shared view-transition name in "from" and only the modal in "to".
+      setMorphOriginId(entry.id);
+      requestAnimationFrame(() => {
+        withViewTransition(() => {
+          setMorphOriginId(null);
+          setMorphActive(true);
+          setEditing(entry);
+          editingRef.current = entry;
+          setFormOpen(true);
+        });
+      });
+    } else {
+      setMorphOriginId(null);
+      setMorphActive(false);
+      setEditing(entry);
+      editingRef.current = entry;
+      setFormOpen(true);
     }
   }
 
@@ -349,13 +426,8 @@ export default function App() {
     setEditing(null);
     editingRef.current = null;
     setError(null);
-    setFormOpen(true);
-  }
-
-  function openEditEntry(entry: EntrySummary) {
-    setEditing(entry);
-    editingRef.current = entry;
-    setError(null);
+    setMorphOriginId(null);
+    setMorphActive(false);
     setFormOpen(true);
   }
 
@@ -386,20 +458,50 @@ export default function App() {
     const entry = deleting;
     if (!entry) return;
     setError(null);
+    setDeleting(null);
+    setLeavingId(entry.id);
+    // Let the leave animation play before the list refresh removes the card.
+    await new Promise((resolve) => window.setTimeout(resolve, 320));
     try {
       await api.delete(entry.id);
-      setDeleting(null);
+      setLeavingId(null);
+      closeDetailsModal();
       await applyList(filtersRef.current);
     } catch (raw) {
+      setLeavingId(null);
       const commandError = toCommandError(raw);
       if (commandError.kind === "Locked") {
         lockScreen();
       } else if (commandError.kind === "NotFound") {
-        setDeleting(null);
+        closeDetailsModal();
         await applyList(filtersRef.current);
       } else {
         setError(spanishMessage(commandError));
       }
+    }
+  }
+
+  /** Close the details modal; the sheet morphs back into the card that opened
+   *  it when a view transition is available, otherwise it closes directly.
+   *  For the reverse morph, the modal already carries the shared name in the
+   *  "from" snapshot; the commit hands that name to the card so the browser
+   *  sees modal → card. */
+  function closeDetailsModal() {
+    const entry = editingRef.current;
+    if (entry && supportsViewTransitions()) {
+      withViewTransition(() => {
+        setMorphOriginId(entry.id);
+        setMorphActive(false);
+        setFormOpen(false);
+        setEditing(null);
+        editingRef.current = null;
+      });
+    } else {
+      setMorphActive(false);
+      setFormOpen(false);
+      setEditing(null);
+      editingRef.current = null;
+      setMorphOriginId(null);
     }
   }
 
@@ -424,7 +526,7 @@ export default function App() {
   if (phase === "locked") {
     return (
       <div className="app-shell">
-        <h1 className="app-title">Keymaps2026 — Administrador de Contraseñas</h1>
+        <h1 className="app-title">Administrador de Contraseñas</h1>
         <LoginScreen
           error={error}
           notice={notice}
@@ -442,12 +544,13 @@ export default function App() {
     <div className="app-shell">
       <header className="vault-header">
         <h1>Mi bóveda</h1>
-        <div>
+        <div className="vault-actions">
           <button type="button" className="primary-button" onClick={openNewEntry}>
+            <Plus size={16} aria-hidden="true" />
             Nueva entrada
           </button>
-          <button type="button" className="action-button" onClick={handleLock}>
-            Bloquear
+          <button type="button" className="icon-button" aria-label="Bloquear" onClick={handleLock}>
+            <Lock size={18} />
           </button>
         </div>
       </header>
@@ -473,28 +576,24 @@ export default function App() {
             <EntryCard
               key={entry.id}
               entry={entry}
-              details={details[entry.id] ?? null}
-              flipped={Boolean(flipped[entry.id])}
-              onToggleFlip={() => void handleToggleFlip(entry.id)}
-              onCopy={(field) => void handleCopy(entry.id, field)}
-              onEdit={() => openEditEntry(entry)}
-              onDelete={() => setDeleting(entry)}
+              leaving={leavingId === entry.id}
+              morphOrigin={morphOriginId === entry.id}
+              onOpen={(origin) => void openEditEntry(entry, origin)}
             />
           ))}
         </div>
       )}
 
-      <EntryFormModal
+      <EntryModal
         key={editing?.id ?? "new"}
         open={formOpen}
         initial={editing}
         initialPassword={editing ? (details[editing.id]?.password ?? "") : ""}
+        morphing={morphActive}
         onSave={handleSave}
-        onCancel={() => {
-          setFormOpen(false);
-          setEditing(null);
-          editingRef.current = null;
-        }}
+        onCancel={closeDetailsModal}
+        onCopy={editing ? (field) => void handleCopy(editing.id, field) : undefined}
+        onDelete={editing ? () => setDeleting(editing) : undefined}
       />
 
       {deleting && (
