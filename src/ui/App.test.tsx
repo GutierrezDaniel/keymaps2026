@@ -310,6 +310,8 @@ describe("App — unlocked vault interactions", () => {
       expect(mockedInvoke).toHaveBeenCalledWith("delete", { id: "id-1" }),
     );
     expect(await screen.findByText(/Aún no hay entradas/)).toBeTruthy();
+    // The details modal must close once the entry is gone.
+    expect(screen.queryByRole("dialog", { name: "Formulario de entrada" })).toBeNull();
   });
 
   it("pre-fills the unified modal from the entry when a card is opened", async () => {
@@ -328,7 +330,7 @@ describe("App — unlocked vault interactions", () => {
     expect(within(dialog).getByLabelText(/Enlace/)).toHaveProperty("value", "https://github.com");
     expect(within(dialog).getByLabelText(/Correo/)).toHaveProperty("value", "ana@example.com");
     expect(within(dialog).getByLabelText(/Usuario/)).toHaveProperty("value", "ana");
-    expect(within(dialog).getByLabelText(/Categoría/)).toHaveProperty("value", "trabajo");
+    expect(within(dialog).getByLabelText(/Categoría/).textContent).toBe("trabajo");
     // Details were fetched before editing, so the decrypted password also
     // pre-fills (initialPassword flows from the cached details).
     expect(within(dialog).getByLabelText(/Contraseña/)).toHaveProperty("value", "s3cr3t");
@@ -362,6 +364,29 @@ describe("App — unlocked vault interactions", () => {
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Formulario de entrada" })).toBeNull(),
     );
+  });
+
+  it("opens a clean new-entry form after a save (no stale inputs)", async () => {
+    mockRoutes({
+      list: () => [ENTRY],
+      create: () => "id-2",
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Nueva entrada" }));
+    fireEvent.change(screen.getByLabelText(/Sitio/), { target: { value: "GitLab" } });
+    fireEvent.change(screen.getByLabelText(/Contraseña/), { target: { value: "p4ss" } });
+    fireEvent.click(screen.getByRole("button", { name: "Guardar" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Formulario de entrada" })).toBeNull(),
+    );
+
+    // Reopen: the fields must be empty, not the previously typed values.
+    fireEvent.click(screen.getByRole("button", { name: "Nueva entrada" }));
+    expect(screen.getByRole("dialog", { name: "Formulario de entrada" })).toBeTruthy();
+    expect(screen.getByLabelText(/Sitio/)).toHaveProperty("value", "");
+    expect(screen.getByLabelText(/Contraseña/)).toHaveProperty("value", "");
   });
 
   it("loads the distinct emails into the email dropdown when unlocked", async () => {

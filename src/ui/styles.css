@@ -57,7 +57,7 @@ body {
 
 input,
 select {
-  caret-color: var(--blue-deep);
+  caret-color: var(--gold-deep);
 }
 
 button {
@@ -81,7 +81,7 @@ select {
 /* ------------------------------------------------------------------ */
 
 :focus-visible {
-  outline: 2px solid var(--blue);
+  outline: 2px solid var(--gold-deep);
   outline-offset: 2px;
 }
 
@@ -144,6 +144,77 @@ select {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Cinematic View Transitions — only active where the API exists.      */
+/*                                                                     */
+/* Phase changes (unlock/lock): the old sheet folds away and the new   */
+/* page rises like turning the page of the codebook. Modal morphs      */
+/* (card → modal, modal → card): the sheet expands from the card and   */
+/* contracts back into it. Both degrade to the CSS entrances above.    */
+/* ------------------------------------------------------------------ */
+
+/* The card that is the morph origin shares the modal's transition
+   identity, so the browser morphs geometry between card and modal. */
+.entry-card.morph-origin,
+.details-modal.morphing {
+  view-transition-name: card-modal;
+}
+
+/* Turn the page: old sheet folds back with a slight rotateX, the new
+   page rises from below. Scoped under .phase-transition on <html>. */
+html.phase-transition::view-transition-old(root) {
+  animation: sheet-fold-away 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+html.phase-transition::view-transition-new(root) {
+  animation: sheet-rise-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes sheet-fold-away {
+  from {
+    opacity: 1;
+    transform: perspective(1200px) rotateX(0deg) translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: perspective(1200px) rotateX(6deg) translateY(-18px);
+  }
+}
+
+@keyframes sheet-rise-in {
+  from {
+    opacity: 0;
+    transform: perspective(1200px) rotateX(-4deg) translateY(22px);
+  }
+  to {
+    opacity: 1;
+    transform: perspective(1200px) rotateX(0deg) translateY(0);
+  }
+}
+
+/* Card ↔ modal morph: the shared element scales between the two shapes.
+   The default view-transition group animation already interpolates the
+   geometry; we add a slight paper tilt on the way in. */
+::view-transition-group(card-modal) {
+  animation-duration: 0.32s;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+::view-transition-new(card-modal) {
+  animation: morph-card-into-modal 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes morph-card-into-modal {
+  from {
+    opacity: 0.6;
+    transform: rotate(-0.6deg) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: rotate(0deg) scale(1);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -152,6 +223,15 @@ select {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+
+  /* View-transition pseudo-elements are outside the universal selector
+     above; collapse them too. */
+  ::view-transition-old(root),
+  ::view-transition-new(root),
+  ::view-transition-old(card-modal),
+  ::view-transition-new(card-modal) {
+    animation: none !important;
   }
 }
 
@@ -286,7 +366,7 @@ select {
 
 .screen form input:focus {
   outline: none;
-  border-bottom-color: var(--blue);
+  border-bottom-color: var(--gold);
 }
 
 .screen form input[aria-invalid="true"] {
@@ -529,7 +609,7 @@ input.filter-input.searchbox {
 }
 
 .filter-input:focus {
-  outline: 2px solid var(--blue);
+  outline: 2px solid var(--gold);
   outline-offset: 1px;
 }
 
@@ -717,10 +797,39 @@ input.filter-input.searchbox {
   font-weight: 700;
 }
 
-/* Details modal: wider sheet, flip-in animation, no scroll needed. */
+/* Details modal: wide horizontal sheet. The six fields sit in a two-column
+   grid (three rows) so the whole form fits without vertical scroll; the
+   header and actions span the full width. */
 .details-modal {
-  max-width: 30rem;
+  max-width: 44rem;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.9rem 1.1rem;
+  align-items: start;
   animation: modal-flip-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.details-modal .details-head,
+.details-modal .modal-actions {
+  grid-column: 1 / -1;
+}
+
+.details-modal .field-control {
+  margin-bottom: 0;
+}
+
+/* When the modal is morphing through a view transition, the transition owns
+   the motion; suppress the flip-in so the two animations do not fight. */
+.details-modal.morphing {
+  animation: none;
+}
+
+/* Narrow windows: fall back to a single column so fields never squeeze. */
+@media (max-width: 44rem) {
+  .details-modal {
+    grid-template-columns: 1fr;
+    max-width: 30rem;
+  }
 }
 
 .details-head {
@@ -802,9 +911,58 @@ input.filter-input.searchbox {
   padding-right: 1.9rem;
 }
 
+/* Category picker in the entry sheet: a themed listbox instead of the native
+   <select> dropdown, which the OS (WebKit/GTK) paints white regardless of
+   CSS. The trigger reads like the sheet's inputs. */
+.category-select {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.category-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  margin-top: 0.3rem;
+  padding: 0.45rem 0.6rem;
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-bottom: 2px solid var(--ink-faint);
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+}
+
+.category-trigger:focus {
+  outline: 2px solid var(--gold);
+  outline-offset: 1px;
+}
+
+.category-chevron {
+  width: 10px;
+  height: 6px;
+  flex-shrink: 0;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236e6755' stroke-width='1.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+/* The dropdown list extends the full sheet-field width (the shared filter
+   listbox is right-aligned by default). */
+.category-listbox {
+  left: 0;
+  right: auto;
+  width: 100%;
+  min-width: 0;
+  z-index: 30;
+}
+
 .modal input:focus,
 .modal select:focus {
-  outline: 2px solid var(--blue);
+  outline: 2px solid var(--gold);
   outline-offset: 1px;
 }
 

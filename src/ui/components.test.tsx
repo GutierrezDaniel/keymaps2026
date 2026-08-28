@@ -69,6 +69,22 @@ describe("EntryCard — summary card and category color chip", () => {
     fireEvent.click(screen.getByRole("button", { name: "Ver detalles de GitHub" }));
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
+
+  it("passes the card's bounding rect as the modal morph origin", () => {
+    const onOpen = vi.fn();
+    renderCard({ onOpen });
+    fireEvent.click(screen.getByRole("button", { name: "Ver detalles de GitHub" }));
+    const origin = onOpen.mock.calls[0][0] as DOMRect | null;
+    expect(origin).not.toBeNull();
+    expect(origin).toHaveProperty("width");
+    expect(origin).toHaveProperty("height");
+  });
+
+  it("marks the card as the morph origin when requested", () => {
+    renderCard({ morphOrigin: true });
+    const card = screen.getByTestId("entry-card");
+    expect(card.classList.contains("morph-origin")).toBe(true);
+  });
 });
 
 describe("EntryModal — unified create/view/edit sheet", () => {
@@ -91,6 +107,31 @@ describe("EntryModal — unified create/view/edit sheet", () => {
     expect(screen.getByLabelText(/Contraseña/)).toHaveProperty("value", "s3cr3t");
   });
 
+  it("toggles the password visibility with the reveal icon", () => {
+    renderDetailsModal();
+    const input = screen.getByLabelText(/Contraseña/);
+    expect(input).toHaveProperty("type", "password");
+
+    fireEvent.click(screen.getByRole("button", { name: "Mostrar" }));
+    expect(screen.getByLabelText(/Contraseña/)).toHaveProperty("type", "text");
+
+    fireEvent.click(screen.getByRole("button", { name: "Ocultar" }));
+    expect(screen.getByLabelText(/Contraseña/)).toHaveProperty("type", "password");
+  });
+
+  it("starts an existing entry prefilled and a new entry empty", () => {
+    const { rerender } = render(
+      <EntryModal open initial={SUMMARY} initialPassword="s3cr3t" onSave={() => undefined} onCancel={() => undefined} />,
+    );
+    expect(screen.getByLabelText(/Sitio/)).toHaveProperty("value", "GitHub");
+
+    // Closing and reopening for a new entry must not leak the previous values.
+    rerender(<EntryModal open={false} initial={null} onSave={() => undefined} onCancel={() => undefined} />);
+    rerender(<EntryModal open initial={null} onSave={() => undefined} onCancel={() => undefined} />);
+    expect(screen.getByLabelText(/Sitio/)).toHaveProperty("value", "");
+    expect(screen.getByLabelText(/Contraseña/)).toHaveProperty("value", "");
+  });
+
   it("offers icon copy controls for link, password, email and username", () => {
     renderDetailsModal();
     expect(screen.getByRole("button", { name: "Copiar enlace" })).toBeTruthy();
@@ -102,7 +143,7 @@ describe("EntryModal — unified create/view/edit sheet", () => {
   it("never offers a copy control for the category field", () => {
     renderDetailsModal();
     const categoryRow = screen.getByText("Categoría").closest(".field-control") as HTMLElement;
-    expect(within(categoryRow).queryByRole("button")).toBeNull();
+    expect(within(categoryRow).queryByRole("button", { name: /Copiar/ })).toBeNull();
   });
 
   it("exposes delete and close as icon actions for an existing entry", () => {
@@ -145,7 +186,9 @@ describe("EntryModal — Spanish validation", () => {
       target: { value: "ana@example.com" },
     });
     fireEvent.change(screen.getByLabelText(/Usuario/), { target: { value: "ana" } });
-    fireEvent.change(screen.getByLabelText(/Categoría/), { target: { value: "estudio" } });
+    // The category picker is a themed listbox: open it and pick an option.
+    fireEvent.click(screen.getByLabelText(/Categoría/));
+    fireEvent.click(screen.getByRole("option", { name: "estudio" }));
     fireEvent.click(screen.getByRole("button", { name: "Guardar" }));
 
     expect(onSave).toHaveBeenCalledWith({

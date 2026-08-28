@@ -89,16 +89,26 @@ export interface EntryCardProps {
   entry: EntrySummary;
   /** True while the card is animating out before deletion. */
   leaving?: boolean;
-  onOpen: () => void;
+  /** True while this card is the origin of a card→modal morph (it shares the
+   *  modal's view-transition name only while the morph is in flight). */
+  morphOrigin?: boolean;
+  /** Called when the card is activated; receives the card's bounding rect so
+   *  the caller can morph the details modal from this exact card. */
+  onOpen: (origin: DOMRect | null) => void;
 }
 
 /** A card whose front shows only the site name; the category is carried by a
  *  colored top chip (data-category drives the ink color). Clicking opens the
  *  details modal. */
-export function EntryCard({ entry, leaving = false, onOpen }: EntryCardProps) {
+export function EntryCard({
+  entry,
+  leaving = false,
+  morphOrigin = false,
+  onOpen,
+}: EntryCardProps) {
   return (
     <article
-      className={`entry-card${leaving ? " leaving" : ""}`}
+      className={`entry-card${leaving ? " leaving" : ""}${morphOrigin ? " morph-origin" : ""}`}
       data-testid="entry-card"
       data-category={entry.category}
     >
@@ -106,7 +116,10 @@ export function EntryCard({ entry, leaving = false, onOpen }: EntryCardProps) {
         type="button"
         className="card-open"
         aria-label={`Ver detalles de ${entry.site}`}
-        onClick={onOpen}
+        onClick={(event) => {
+          const card = event.currentTarget.closest(".entry-card");
+          onOpen(card ? card.getBoundingClientRect() : null);
+        }}
       >
         <span className="card-site">{entry.site}</span>
       </button>
@@ -115,10 +128,73 @@ export function EntryCard({ entry, leaving = false, onOpen }: EntryCardProps) {
 }
 
 // ---------------------------------------------------------------------------
-// Entry modal — one modal for viewing details (editable), creating a new entry
-// and editing an existing one. Shows the six fields as a form; copy controls
-// appear only for an existing entry (link, password, email, username — never
-// the category), and delete only for an existing entry.
+// Category dropdown — custom themed listbox for the entry sheet.
+// ---------------------------------------------------------------------------
+
+export interface CategorySelectProps {
+  value: string;
+  onChange: (category: string) => void;
+}
+
+/** The entry sheet's category picker. A native <select> opens its options
+ *  with the OS theme (white in WebKit/GTK) no matter the CSS, so the modal
+ *  uses the same themed listbox pattern as the vault filters. */
+export function CategorySelect({ value, onChange }: CategorySelectProps) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocMouseDown(event: MouseEvent) {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDocMouseDown);
+    return () => document.removeEventListener("mousedown", onDocMouseDown);
+  }, [open]);
+
+  return (
+    <div className="category-select" ref={rootRef}>
+      <button
+        type="button"
+        id="field-category"
+        className="category-trigger"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((previous) => !previous)}
+      >
+        <span>{value}</span>
+        <span className="category-chevron" aria-hidden="true" />
+      </button>
+      {open && (
+        <div className="filter-listbox category-listbox" role="listbox" aria-label="Categoría">
+          {CATEGORIES.map((option) => (
+            <button
+              key={option}
+              type="button"
+              role="option"
+              aria-selected={option === value}
+              className={`filter-option${option === value ? " selected" : ""}`}
+              onClick={() => {
+                onChange(option);
+                setOpen(false);
+              }}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Entry modal — one modal for viewing details (creating), editing an
+// existing one. Shows the six fields as a form; copy controls appear only
+// for an existing entry (link, password, email, username — never the
+// category), and delete only for an existing entry.
 // ---------------------------------------------------------------------------
 
 export interface EntryModalProps {
@@ -127,6 +203,9 @@ export interface EntryModalProps {
   initial: EntrySummary | null;
   /** Decrypted password for an existing entry (prefill); empty for new. */
   initialPassword?: string;
+  /** True while a card→modal view transition is morphing this sheet in; the
+   *  CSS flip-in is suppressed so the two animations do not fight. */
+  morphing?: boolean;
   onSave: (input: EntryInput) => void;
   onCancel: () => void;
   /** Copy a secret field — wired only for an existing entry. */
@@ -145,6 +224,7 @@ export function EntryModal({
   open,
   initial,
   initialPassword = "",
+  morphing = false,
   onSave,
   onCancel,
   onCopy,
@@ -157,7 +237,24 @@ export function EntryModal({
   const [username, setUsername] = useState(initial?.username ?? "");
   const [category, setCategory] = useState(initial?.category ?? CATEGORIES[0]);
   const [errors, setErrors] = useState<FieldErrors>({});
+  const [revealPassword, setRevealPassword] = useState(false);
   const isExisting = initial !== null;
+
+  // Re-sync field state every time the modal opens. A fresh entry starts
+  // empty, an edit starts from the entry's values; without this the component
+  // keeps stale inputs between openings because it is not remounted (its key
+  // is stable per entry id / "new").
+  useEffect(() => {
+    if (!open) return;
+    setSite(initial?.site ?? "");
+    setLink(initial?.link ?? "");
+    setPassword(initialPassword);
+    setEmail(initial?.email ?? "");
+    setUsername(initial?.username ?? "");
+    setCategory(initial?.category ?? CATEGORIES[0]);
+    setErrors({});
+    setRevealPassword(false);
+  }, [open]);
 
   if (!open) return null;
 
@@ -182,7 +279,7 @@ export function EntryModal({
   return (
     <div className="modal-overlay" role="presentation">
       <form
-        className="modal details-modal"
+        className={`modal details-modal${morphing ? " morphing" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-label="Formulario de entrada"
@@ -213,16 +310,9 @@ export function EntryModal({
         </div>
 
         <div className="field-control">
-          <label htmlFor="field-link">Enlace</label>
+          <label htmlFor="field-category">Categoría</label>
           <div className="field-row-inline">
-            <input
-              id="field-link"
-              value={link}
-              onChange={(event) => setLink(event.target.value)}
-            />
-            {isExisting && onCopy && (
-              <CopyButton label="Copiar enlace" onCopy={() => onCopy("link")} />
-            )}
+            <CategorySelect value={category} onChange={setCategory} />
           </div>
         </div>
 
@@ -231,11 +321,19 @@ export function EntryModal({
           <div className="field-row-inline">
             <input
               id="field-password"
-              type="password"
+              type={revealPassword ? "text" : "password"}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               aria-invalid={Boolean(errors.password)}
             />
+            <button
+              type="button"
+              className="icon-button"
+              aria-label={revealPassword ? "Ocultar" : "Mostrar"}
+              onClick={() => setRevealPassword((previous) => !previous)}
+            >
+              {revealPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+            </button>
             {isExisting && onCopy && (
               <CopyButton label="Copiar contraseña" onCopy={() => onCopy("password")} />
             )}
@@ -276,19 +374,16 @@ export function EntryModal({
         </div>
 
         <div className="field-control">
-          <label htmlFor="field-category">Categoría</label>
+          <label htmlFor="field-link">Enlace</label>
           <div className="field-row-inline">
-            <select
-              id="field-category"
-              value={category}
-              onChange={(event) => setCategory(event.target.value)}
-            >
-              {CATEGORIES.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
+            <input
+              id="field-link"
+              value={link}
+              onChange={(event) => setLink(event.target.value)}
+            />
+            {isExisting && onCopy && (
+              <CopyButton label="Copiar enlace" onCopy={() => onCopy("link")} />
+            )}
           </div>
         </div>
 
