@@ -8,7 +8,7 @@ web
 
 ## Users
 
-Primary user is the owner-developer (Daniel), using the app daily on their own
+Primary user is the owner-developer, using the app daily on their own
 machines. The product is considered **potentially public**: it may be
 distributed to a wider audience at some point, so the interface must feel
 presentable as a product to non-technical people, not like an internal tool.
@@ -38,9 +38,9 @@ than a hidden risk.
 - Daily use: unlock, search/filter, copy a field, lock. Sessions auto-lock
   after 5 minutes of inactivity; copied secrets clear from the clipboard after
   20 seconds; failed logins back off (1s → 2s → 4s → 16s…, capped at 60s).
-- Entries render as cards grouped/colored by category
-  (`entretenimiento`, `trabajo`, `estudio`, `servicios`); cards flip to reveal
-  and copy the secret fields.
+- Entries render as summary cards grouped/colored by category
+  (`entretenimiento`, `trabajo`, `estudio`, `servicios`); selecting a card
+  opens the unified modal to view, copy and edit the secret fields.
 
 ## Capabilities and Constraints
 

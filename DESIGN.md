@@ -28,7 +28,7 @@ bound to it.
 | Classified red | `--red` / `--red-deep` | `#ad3a2d` / `#8c2f24` | Warnings, danger, stamps |
 | Red wash | `--red-paper` | `#f6e4dc` | Stamp backgrounds |
 | Quiet red | `--red-quiet` | `#8f4a3c` | Locked-screen note |
-| Fountain blue | `--blue` / `--blue-deep` | `#2f5d8c` / `#26496e` | Focus, category "trabajo" |
+| Fountain blue | `--blue` / `--blue-deep` | `#2f5d8c` / `#26496e` | Selection, category "trabajo" |
 | Stamp green | `--green` | `#2f6b3f` | "Copiado" seal, category "estudio" |
 | Gold | `--gold` / `--gold-deep` | `#86601f` / `#6e4d18` | Labels, icons (except danger) |
 | Line | `--line` | `#cbc0a4` | Hairlines |
@@ -53,6 +53,11 @@ Category ink chips: `trabajo` blue, `estudio` green, `entretenimiento` amber
   `card-enter`), the details modal flips in with perspective (`modal-flip-in`),
   cards lift on hover, deleted cards leave with `card-leave` before the list
   refresh. All motion disabled under `prefers-reduced-motion`.
+- Cinematic View Transitions where the API exists (feature-detected, CSS
+  fallback otherwise): unlock folds the locked sheet away and the vault rises
+  (`sheet-fold-away` / `sheet-rise-in`); lock reverses the fold; the details
+  modal morphs from the card that opened it and back (`view-transition-name:
+  card-modal` shared between the origin card and the sheet).
 
 ## Components
 
@@ -67,15 +72,19 @@ Category ink chips: `trabajo` blue, `estudio` green, `entretenimiento` amber
   filter shows a gold dot. WebKit/GTK `appearance: none` fix preserved.
 - **Entry cards**: summary only — site name, category as a colored top chip
   (square top corners, rounded bottom), whole card opens the details modal.
-- **Entry modal** (unified create/view/edit): one sheet for viewing details,
-  adding and editing. Six Spanish labels; copy icons only for link, password,
+- **Entry modal** (unified create/view/edit): one wide horizontal sheet —
+  two-column grid so all six fields fit without scrolling. Six Spanish labels;
+  password has a reveal/hide toggle; copy icons only for link, password,
   email, username of an existing entry; delete icon only for existing entries;
-  Guardar/Cancelar actions.
+  Guardar/Cancelar actions. Fields reset on every open. The category picker is
+  a custom themed listbox (a native `<select>` dropdown is painted by the OS
+  white in WebKit/GTK, so the sheet draws its own paper+ink options). The
+  modal closes itself when its entry is deleted.
 - **Delete confirm**: Spanish alertdialog "Esta acción no se puede deshacer."
 - **Backoff**: red stamp countdown.
 
 ## Accessibility
 
 Spanish-neutral copy everywhere; `role` + `aria-label` on all icon controls;
-focus-visible rings in fountain blue; contrast floor 4.5:1; reduced-motion
-support; keyboard reachable cards and dropdowns.
+focus-visible rings in gold (matching labels/icons); contrast floor 4.5:1;
+reduced-motion support; keyboard reachable cards and dropdowns.
