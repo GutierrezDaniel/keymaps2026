@@ -1,0 +1,71 @@
+name: Windows Release
+
+# Builds the Windows installers (MSI + NSIS setup.exe) and publishes them as a
+# GitHub Release. Triggered only when a new version tag (`v*`) is pushed on
+# main — regular pushes and PRs do not run this workflow.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Clavemaestra (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Run frontend tests
+        run: npm test
+
+      - name: Run core tests
+        working-directory: src-tauri
+        run: cargo test --lib
+
+      # Derive the bundle version from the triggering tag (`v1.1.0` -> `1.1.0`)
+      # so every release ships installers whose version matches the tag without
+      # manual edits to tauri.conf.json.
+      - name: Sync bundle version from tag
+        run: node -e "const fs=require('fs');const p='src-tauri/tauri.conf.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));j.version=process.argv[1].replace(/^v/,'');fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');console.log('bundle version -> '+j.version)" "${{ github.ref_name }}"
+
+      - name: Build Tauri bundles (MSI + NSIS)
+        run: npm run tauri:build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: clavemaestra-windows-${{ github.ref_name }}
+          path: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Clavemaestra ${{ github.ref_name }}
+          files: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+          generate_release_notes: true
