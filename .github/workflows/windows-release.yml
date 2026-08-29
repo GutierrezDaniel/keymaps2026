@@ -43,6 +43,12 @@ jobs:
         working-directory: src-tauri
         run: cargo test --lib
 
+      # Derive the bundle version from the triggering tag (`v1.1.0` -> `1.1.0`)
+      # so every release ships installers whose version matches the tag without
+      # manual edits to tauri.conf.json.
+      - name: Sync bundle version from tag
+        run: node -e "const fs=require('fs');const p='src-tauri/tauri.conf.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));j.version=process.argv[1].replace(/^v/,'');fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');console.log('bundle version -> '+j.version)" "${{ github.ref_name }}"
+
       - name: Build Tauri bundles (MSI + NSIS)
         run: npm run tauri:build
 
