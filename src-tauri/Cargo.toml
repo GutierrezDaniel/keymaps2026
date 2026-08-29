@@ -1,6 +1,6 @@
 [package]
 name = "keymaps2026"
-version = "0.1.0"
+version = "1.0.0"
 description = "Personal password manager MVP (Tauri v2 + Rust hexagonal core)"
 authors = ["keymaps2026"]
 edition = "2021"
