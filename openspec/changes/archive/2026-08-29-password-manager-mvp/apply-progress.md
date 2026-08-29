@@ -4,7 +4,7 @@
 **PR**: 1 (Unit 1) + 2 (Unit 2) + 3 (Unit 3) + 4 (Unit 4)
 **Mode**: Standard (strict_tdd: false — greenfield)
 **Dates**: 2026-08-26 (PR 1), 2026-08-26 (PR 2), 2026-08-26 (PR 3), 2026-08-26 (PR 4)
-**Status**: Phases 1 (1.1–1.7), 2 (2.1–2.3), 3 (3.1–3.5), and 4 (4.1–4.4) COMPLETE — `cargo test --lib` green (42 passed); `cargo test --test vault_repo` green (8 passed); `cargo build --features tauri-app` compiles; `npm test -- --run` green (43 passed); `npm run build` clean. Remaining: Phase 5 (E2E + docs).
+**Status**: Phases 1 (1.1–1.7), 2 (2.1–2.3), 3 (3.1–3.5), and 4 (4.1–4.4) COMPLETE — `cargo test --lib` green (43 passed); `cargo test --test vault_repo` green (12 passed); `cargo build --features tauri-app` compiles; `npm test` green (61 passed); `npm run build` clean. Phase 5 (E2E + docs) also complete — see the final note.
 
 ## Completed Tasks (PR 1 — 1.1–1.7)
 
@@ -38,15 +38,15 @@
 
 ## Test Results
 
-- `cargo test --lib` (from `src-tauri/`): **42 passed, 0 failed, 0 warnings** — 14 (PR 1) + 3 (clipboard) + 5 (backup) + 20 (session/backoff/commands).
-- `cargo test --test vault_repo` (from `src-tauri/`): **8 passed, 0 failed** — PR 2 tests stay green after the `SqliteVaultRepository` path/checkpoint additions.
+- `cargo test --lib` (from `src-tauri/`): **43 passed, 0 failed, 0 warnings** — 14 (PR 1) + 3 (clipboard) + 5 (backup) + 20 (session/backoff/commands) + 1 later addition.
+- `cargo test --test vault_repo` (from `src-tauri/`): **12 passed, 0 failed** — 8 PR 2 tests + 4 later additions stay green.
 - `cargo build` (default features): compiles, no warnings. `cargo build --features tauri-app`: **compiles** (webkit2gtk system libs present) with state management + 11 command registrations.
 
 ## Work Unit Evidence
 
 | Evidence | Required value |
 |---|---|
-| Focused test command + result | `cargo test --lib` from `src-tauri/` → `test result: ok. 42 passed; 0 failed` (backoff/cap/reset, lock zeroize, auto-lock, unlock/backoff, CRUD commands, copy_field, export refusal/atomicity, clipboard conditional clear) |
+| Focused test command + result | `cargo test --lib` from `src-tauri/` → `test result: ok. 43 passed; 0 failed` (backoff/cap/reset, lock zeroize, auto-lock, unlock/backoff, CRUD commands, copy_field, export refusal/atomicity, clipboard conditional clear) |
 | Runtime harness | `N/A` for this PR — the Tauri shell compiles with `--features tauri-app` (verified) but running it needs a desktop session; E2E unlock→copy→auto-lock is Phase 5 (task 5.1). The command surface is exercised headlessly through `VaultApp` with the in-memory repo + fake clipboard. |
 | Rollback boundary | Delete `src-tauri/src/adapters/{clipboard,backup,tauri}.rs`; revert `adapters/mod.rs` lines, `desktop.rs`, `main.rs`, and the Cargo.toml serde/secrecy-serde lines; drop commits `9201372`/`7eda8c3`/`780431b`/`738185d`. The only Phase 2 file touched is `sqlite.rs` (added `path` field + `db_path()`/`checkpoint()` — reverting is safe: `open`/`open_in_memory` behavior unchanged). No Phase 1 core file touched. |
 
@@ -82,7 +82,7 @@
 **PR**: 4 (Unit 4) — LAST implementation PR of the chain (stacked-to-main, 4 of 4)
 **Mode**: Standard (strict_tdd: false — greenfield, per openspec/config.yaml)
 **Date**: 2026-08-26
-**Status**: Phase 4 (4.1–4.4) COMPLETE — `npm test -- --run` green (43 passed, 0 failed); `npm run build` (tsc && vite build) clean; `cargo test --lib` (42) and `cargo test --test vault_repo` (8) still green (backend untouched).
+**Status**: Phase 4 (4.1–4.4) COMPLETE — `npm test` green (61 passed, 0 failed); `npm run build` (tsc && vite build) clean; `cargo test --lib` (43) and `cargo test --test vault_repo` (12) still green (backend untouched).
 
 ## Completed Tasks (PR 4 — 4.1–4.4)
 
@@ -91,14 +91,14 @@
 | 4.1 `src/ui/App.tsx` — login/locked screens with Spanish irreversible-loss warnings | ✅ | Screen state machine `booting → create \| locked → unlocked`. Create screen: prominent Spanish irreversible-loss warning before master-password confirmation ("Advertencia: pérdida irreversible… no existe ningún mecanismo de recuperación"). Locked screen: same-class permanent-loss warning + login + backoff countdown. `create_vault` success → returns to the LOGIN screen (PR 3 contract: create does NOT auto-unlock). `VaultNotInitialized` (surfaced by `unlock`) switches locked → create. Auto-lock (Rust 5-min) surfaces lazily: any command rejecting `Locked` clears entries/details and shows the locked screen. `record_activity` implicit — every command touches the session in Rust. |
 | 4.2 `src/ui/components.tsx` — card flip, masked password reveal/hide, form modal, delete confirm, search/filters | ✅ | `EntryCard` 3D CSS flip; back shows all six fields with Spanish labels (Sitio/Enlace/Contraseña/Correo/Usuario/Categoría); copy controls ONLY for link/password/email/username — never category (vault-ui "Non-copyable category"). `MaskedPassword` masked by default, Mostrar/Ocultar toggle, bullets never leak short-password length. `EntryFormModal` Spanish validation (El sitio es obligatorio / La contraseña es obligatoria), stays open on invalid submit. `DeleteConfirm` Spanish alertdialog ("¿Eliminar la entrada «X»?", "Esta acción no se puede deshacer."). `SearchFilters` site/category/email conjunctive. `BackoffNotice` Spanish countdown ticking to 0. `CopyButton` transient "Copiado" feedback with cleanup. |
 | 4.3 `src/ui/api.tsx` + `src/ui/styles.css` — typed IPC client, scoped CSS | ✅ | Typed client covers ALL 11 Tauri commands with exact serde shapes: snake_case `master_password` inside `req`, snake_case `CopyField` variants, camelCase arg keys (single-word args → identity), `list` filters nullable. `toCommandError` normalizes Tauri rejections (unit-variant strings "Locked", externally tagged { Backoff: { seconds } }, { Store: msg }) into a typed `CommandError` kind. `CATEGORIES` const array → `Category` union type (TS skill const-types pattern). Scoped CSS with CSS variables (design decision: no Tailwind/UI kit), `.warning` prominent styling. Styles imported by components.tsx. |
-| 4.4 Component tests (vault-ui) | ✅ | 43 tests across `api.test.tsx` (16 — command names/args + error normalization), `components.test.tsx` (13 — Spanish labels, flip fields, masking reveal/hide, no category copy control, invalid form, delete confirm, backoff countdown), `App.test.tsx` (14 — boot resolution, warnings, create-does-not-auto-unlock, mismatched passwords, backoff surfaced + submit disabled, explicit lock, auto-lock surfacing, flip details, copy, delete refresh, form save). `@tauri-apps/api/core` mocked via `vi.mock`; all headless in jsdom. |
+| 4.4 Component tests (vault-ui) | ✅ | 61 tests across `api.test.tsx` (17 — command names/args + error normalization), `components.test.tsx` (26 — Spanish labels, flip fields, masking reveal/hide, no category copy control, invalid form, delete confirm, backoff countdown), `App.test.tsx` (18 — boot resolution, warnings, create-does-not-auto-unlock, mismatched passwords, backoff surfaced + submit disabled, explicit lock, auto-lock surfacing, flip details, copy, delete refresh, form save). Counts grew from 43 after later UI-polish commits. `@tauri-apps/api/core` mocked via `vi.mock`; all headless in jsdom. |
 
 ## Test Results
 
-- `npm test -- --run` (repo root): **43 passed, 0 failed** — 16 (api) + 13 (components) + 14 (App).
+- `npm test` (repo root): **61 passed, 0 failed** — 17 (api) + 26 (components) + 18 (App).
 - `npm run build` (tsc && vite build): **clean** — type-checks all of `src/` including tests; Vite bundle 157.27 kB JS / 5.94 kB CSS (dist/).
-- `cargo test --lib` (from `src-tauri/`): **42 passed, 0 failed** — untouched.
-- `cargo test --test vault_repo` (from `src-tauri/`): **8 passed, 0 failed** — untouched.
+- `cargo test --lib` (from `src-tauri/`): **43 passed, 0 failed** — untouched.
+- `cargo test --test vault_repo` (from `src-tauri/`): **12 passed, 0 failed** — untouched.
 
 ## Work Unit Evidence
 
@@ -240,7 +240,7 @@
 **Change**: password-manager-mvp
 **Batch**: 2026-08-26 — user UX refinement after the Phase 5 review: replace the email **text input** filter in `SearchFilters` with a **`<select>` dropdown** listing every distinct email stored in the vault ("Todos los correos" = empty value clears the filter).
 **Mode**: Standard (strict_tdd: false). Not a tasks.md task; 5.1 stays `[ ]`.
-**Status**: Implemented and verified — `cargo test --lib` **43 passed**; `cargo test --test vault_repo` **12 passed** (8 + 4 new); `npm test -- --run` **52 passed** (47 + 5 new); `npm run build` clean; `cargo build --features tauri-app` compiles.
+**Status**: Implemented and verified — `cargo test --lib` **43 passed**; `cargo test --test vault_repo` **12 passed** (8 + 4 new); `npm test` **61 passed** (52 + 9 later UI-polish additions); `npm run build` clean; `cargo build --features tauri-app` compiles.
 
 ## Why the backend
 
@@ -271,7 +271,7 @@ Deriving emails from the currently loaded `entries` would be incomplete whenever
 
 - `cargo test --lib` (from `src-tauri/`): **43 passed, 0 failed** — 42 prior + 1 new (`list_emails` command surface).
 - `cargo test --test vault_repo` (from `src-tauri/`): **12 passed, 0 failed** — 8 prior + 4 new email-list tests.
-- `npm test -- --run` (repo root): **Test Files 3 passed (3); Tests 52 passed (52)** — 17 (api) + 18 (components) + 17 (App).
+- `npm test` (repo root): **Test Files 3 passed (3); Tests 61 passed (61)** — 17 (api) + 26 (components) + 18 (App).
 - `npm run build` (tsc && vite build): **clean** — dist/assets/index-aX9MAhx0.js 157.61 kB, CSS 6.06 kB.
 - `cargo build --features tauri-app`: **compiles** with the 12th command registered.
 - `npm run tauri:dev` NOT run (task 5.1 remains orchestrator+user).
@@ -280,7 +280,7 @@ Deriving emails from the currently loaded `entries` would be incomplete whenever
 
 | Evidence | Required value |
 |---|---|
-| Focused test command + result | Backend unit: `cargo test --lib` → 43 passed; `cargo test --test vault_repo` → 12 passed (per-file: `list_emails_*` 4 tests). Frontend unit: `npm test -- --run` → 52 passed (per-file: api 17, components 18, App 17). |
+| Focused test command + result | Backend unit: `cargo test --lib` → 43 passed; `cargo test --test vault_repo` → 12 passed (per-file: `list_emails_*` 4 tests). Frontend unit: `npm test` → 61 passed (per-file: api 17, components 26, App 18). |
 | Runtime harness | `N/A` — the Tauri IPC is mocked headless in jsdom by design; the Rust command surface is proven headlessly (`list_emails` refuses `Locked` and returns distinct values) and `cargo build --features tauri-app` compiles the registered command. Real webview confirmation of the dropdown is part of task 5.1's remaining E2E. |
 | Rollback boundary | Backend: revert `b7595b9` (5 files: trait, sqlite, tauri command/impl/test, FakeRepo, vault_repo tests). Frontend: revert `cd2e0dc` (6 files: api client + 3 UI files + 3 test files); `SearchFilters` falls back to the text input while keeping the `|| null` normalization from the bug-fix batch. |
 
@@ -311,3 +311,8 @@ Deriving emails from the currently loaded `entries` would be incomplete whenever
 **Date**: 2026-08-26
 **Status**: Task 5.1 VALIDATED by the user on the real app (`npm run tauri:dev`): the three E2E bug fixes confirmed working and the email selector filter confirmed working. Openspec artifacts synced to the final state: `tasks.md` 5.1 → `[x]` and 3.3 → 12 commands; `design.md` Tauri-boundary decision → 12 commands (`create_vault`, `list_emails` added); `proposal.md` success criterion 1 → `[x]`; `vault-entries/spec.md` Search-and-filters requirement now specifies the distinct-email selector with a clear option and adds a scenario.
 **Next**: user's planned visual modifications → then `sdd-verify` → `sdd-archive`.
+
+# Test count refresh (pre-archive)
+
+**Date**: 2026-08-29
+**Status**: Counts refreshed to ground truth after later UI-polish commits added tests without updating this log: `npm test` → **61** (api 17, components 26, App 18); `cargo test --lib` → **43**; `cargo test --test vault_repo` → **12**. All verified green by `sdd-verify` (116 tests, 0 failures) — see verify-report.md. Delta specs (6 capabilities) added under `specs/` from the canonical specs, and the change is ready for archive.
