@@ -484,6 +484,19 @@ html.phase-transition::view-transition-new(root) {
   background: var(--red-paper);
 }
 
+/* Disabled ink controls (e.g. the category trash for in-use or last
+   categories): gray out the icon, drop the hover/active affordances, and
+   show the not-allowed cursor while the tooltip explains why. */
+.icon-button:disabled,
+.icon-button:disabled:hover {
+  color: var(--ink-muted);
+  border-color: transparent;
+  background: transparent;
+  cursor: not-allowed;
+  opacity: 0.5;
+  transform: none;
+}
+
 /* ------------------------------------------------------------------ */
 /* Vault header + filters                                              */
 /* ------------------------------------------------------------------ */
