@@ -9,7 +9,7 @@
 //   is how the Rust 5-minute auto-lock surfaces to the UI).
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Lock, Plus } from "lucide-react";
+import { Lock, Plus, Tags } from "lucide-react";
 import { api, toCommandError } from "./api";
 import type {
   EntrySummary,
@@ -19,9 +19,12 @@ import type {
   CopyField,
   CommandError,
   CategoryDto,
+  UpdateCategoryRequest,
+  UpdateCategoryResult,
 } from "./api";
 import {
   BackoffNotice,
+  CategoryAdminModal,
   DeleteConfirm,
   EntryCard,
   EntryModal,
@@ -68,6 +71,18 @@ function spanishMessage(error: CommandError): string {
       return "Contraseña incorrecta.";
     case "InvalidCategory":
       return "La categoría seleccionada no es válida.";
+    case "BlankCategoryName":
+      return "El nombre de la categoría no puede estar vacío.";
+    case "InvalidCategoryColor":
+      return "El color elegido no es válido.";
+    case "DuplicateCategory":
+      return "Ya existe una categoría con ese nombre.";
+    case "CategoryInUse":
+      return "La categoría está en uso y no se puede eliminar.";
+    case "LastCategory":
+      return "Debe quedar al menos una categoría.";
+    case "CategoryNotFound":
+      return "La categoría ya no existe.";
     case "NotFound":
       return "La entrada ya no existe.";
     case "InvalidField":
@@ -220,6 +235,11 @@ export default function App() {
    *  backend); drives the admin modal, entry-form selectors, filters and the
    *  card color map. */
   const [categories, setCategories] = useState<CategoryDto[]>([]);
+  /** Number of entries referencing each category, computed from a full
+   *  unfiltered entry snapshot — never from the filtered display list, which
+   *  an active filter can shrink to a subset. */
+  const [usage, setUsage] = useState<Record<string, number>>({});
+  const [adminOpen, setAdminOpen] = useState(false);
   const [filters, setFilters] = useState<Filters>({});
   const [details, setDetails] = useState<Record<string, EntryDetails>>({});
   const [leavingId, setLeavingId] = useState<string | null>(null);
@@ -246,6 +266,8 @@ export default function App() {
     setEntries([]);
     setEmails([]);
     setCategories([]);
+    setUsage({});
+    setAdminOpen(false);
     setDetails({});
     setLeavingId(null);
     setEditing(null);
@@ -256,12 +278,25 @@ export default function App() {
     setNotice(null);
   }
 
-  /** Refresh the category map from the repository. Categories only change
-   *  through the administration modal, so this runs after unlock and after
-   *  every category mutation (never on plain list refreshes). */
+  /** Refresh the category map and its per-category entry counts. Categories
+   *  and usage only change through the administration modal or entry saves,
+   *  so this runs after unlock, after entry saves/deletes and after every
+   *  category mutation — never on plain list refreshes. The usage snapshot
+   *  comes from the unfiltered entry list so counts stay exact under any
+   *  active filter. */
   async function loadCategories(): Promise<void> {
     try {
-      setCategories(await api.listCategories());
+      const [categoryList, allEntries] = await Promise.all([
+        api.listCategories(),
+        api.list(null),
+      ]);
+      setCategories(categoryList);
+      const next: Record<string, number> = {};
+      for (const category of categoryList) next[category.name] = 0;
+      for (const entry of allEntries) {
+        next[entry.category] = (next[entry.category] ?? 0) + 1;
+      }
+      setUsage(next);
     } catch (raw) {
       const commandError = toCommandError(raw);
       if (commandError.kind === "Locked") {
@@ -475,6 +510,8 @@ export default function App() {
       setEditing(null);
       editingRef.current = null;
       await applyList(filtersRef.current);
+      // The entry may have changed categories, so the usage counts refresh.
+      void loadCategories();
     } catch (raw) {
       const commandError = toCommandError(raw);
       if (commandError.kind === "Locked") {
@@ -498,6 +535,7 @@ export default function App() {
       setLeavingId(null);
       closeDetailsModal();
       await applyList(filtersRef.current);
+      void loadCategories();
     } catch (raw) {
       setLeavingId(null);
       const commandError = toCommandError(raw);
@@ -533,6 +571,57 @@ export default function App() {
       setEditing(null);
       editingRef.current = null;
       setMorphOriginId(null);
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Category administration (category-administration spec). The modal owns
+  // validation and confirmation UX; these handlers translate its callbacks
+  // into commands and rethrow normalized errors so the modal can show them
+  // inline. "Locked" locks the screen and is never rethrown.
+  // -----------------------------------------------------------------------
+
+  async function handleCreateCategory(category: CategoryDto): Promise<void> {
+    try {
+      await api.createCategory(category);
+      await loadCategories();
+    } catch (raw) {
+      const commandError = toCommandError(raw);
+      if (commandError.kind === "Locked") {
+        lockScreen();
+        return;
+      }
+      throw commandError;
+    }
+  }
+
+  async function handleUpdateCategory(
+    request: UpdateCategoryRequest,
+  ): Promise<UpdateCategoryResult> {
+    try {
+      const result = await api.updateCategory(request);
+      if (result.status === "applied") await loadCategories();
+      return result;
+    } catch (raw) {
+      const commandError = toCommandError(raw);
+      if (commandError.kind === "Locked") {
+        lockScreen();
+      }
+      throw commandError;
+    }
+  }
+
+  async function handleDeleteCategory(name: string): Promise<void> {
+    try {
+      await api.deleteCategory(name);
+      await loadCategories();
+    } catch (raw) {
+      const commandError = toCommandError(raw);
+      if (commandError.kind === "Locked") {
+        lockScreen();
+        return;
+      }
+      throw commandError;
     }
   }
 
@@ -585,6 +674,10 @@ export default function App() {
           <button type="button" className="primary-button" onClick={openNewEntry}>
             <Plus size={16} aria-hidden="true" />
             Nueva entrada
+          </button>
+          <button type="button" className="action-button" onClick={() => setAdminOpen(true)}>
+            <Tags size={15} aria-hidden="true" />
+            Administrar categorías
           </button>
           <button type="button" className="icon-button" aria-label="Bloquear" onClick={handleLock}>
             <Lock size={18} />
@@ -647,6 +740,16 @@ export default function App() {
           onCancel={() => setDeleting(null)}
         />
       )}
+
+      <CategoryAdminModal
+        open={adminOpen}
+        categories={categories}
+        usage={usage}
+        onCreate={handleCreateCategory}
+        onUpdate={handleUpdateCategory}
+        onDelete={handleDeleteCategory}
+        onClose={() => setAdminOpen(false)}
+      />
     </div>
   );
 }

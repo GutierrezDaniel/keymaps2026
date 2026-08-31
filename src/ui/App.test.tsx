@@ -162,6 +162,8 @@ describe("App — login and backoff", () => {
     expect(mockedInvoke).toHaveBeenCalledWith("unlock", {
       req: { master_password: "correct horse" },
     });
+    // The category map loads with the vault after unlocking.
+    await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("list_categories"));
   });
 });
 
@@ -246,6 +248,107 @@ describe("App — vault creation", () => {
     // create_vault does NOT auto-unlock: the login screen must appear.
     expect(await screen.findByLabelText("Contraseña maestra")).toBeTruthy();
     expect(screen.getByText("Bóveda creada correctamente. Ahora inicia sesión.")).toBeTruthy();
+  });
+});
+
+describe("App — category administration", () => {
+  it("opens the administration modal from the header button", async () => {
+    bootUnlocked();
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Administrar categorías" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Administrar categorías" });
+    for (const category of CATEGORIES) {
+      expect(within(dialog).getByText(category.name)).toBeTruthy();
+    }
+    // In-use categories are counted from the loaded entries (trabajo has one).
+    expect(within(dialog).getByText("1 entrada")).toBeTruthy();
+  });
+
+  it("creates a category through the administration modal", async () => {
+    mockRoutes({
+      list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
+      create_category: () => undefined,
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Administrar categorías" }));
+    fireEvent.change(screen.getByLabelText("Nombre de la nueva categoría"), {
+      target: { value: "lectura" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Agregar" }));
+
+    await waitFor(() =>
+      expect(mockedInvoke).toHaveBeenCalledWith("create_category", {
+        input: { name: "lectura", color: "#7a5220" },
+      }),
+    );
+    // The category map refreshes after the mutation.
+    await waitFor(() => expect(mockedInvoke).toHaveBeenCalledWith("list_categories"));
+  });
+
+  it("renames a category with the affected count and confirmation", async () => {
+    let preview = true;
+    mockRoutes({
+      list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
+      update_category: () =>
+        preview
+          ? { status: "rename_preview", affected_entries: 1 }
+          : { status: "applied" },
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Administrar categorías" }));
+    fireEvent.click(screen.getByRole("button", { name: "Editar trabajo" }));
+    fireEvent.change(screen.getByLabelText("Nombre de trabajo"), {
+      target: { value: "laburo" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Guardar nombre" }));
+
+    await waitFor(() =>
+      expect(mockedInvoke).toHaveBeenCalledWith("update_category", {
+        request: {
+          old_name: "trabajo",
+          new_name: "laburo",
+          color: "#2f5d8c",
+          confirmed: false,
+        },
+      }),
+    );
+    const dialog = screen.getByRole("alertdialog", { name: "Confirmar cambio de nombre" });
+    expect(within(dialog).getByText("1 entrada se actualizará.")).toBeTruthy();
+
+    preview = false;
+    fireEvent.click(within(dialog).getByRole("button", { name: "Renombrar" }));
+    await waitFor(() =>
+      expect(mockedInvoke).toHaveBeenCalledWith("update_category", {
+        request: {
+          old_name: "trabajo",
+          new_name: "laburo",
+          color: "#2f5d8c",
+          confirmed: true,
+        },
+      }),
+    );
+  });
+
+  it("disables the trash for a category referenced by an entry", async () => {
+    bootUnlocked();
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Administrar categorías" }));
+
+    const trash = screen.getByRole("button", { name: "Eliminar trabajo" }) as HTMLButtonElement;
+    expect(trash.disabled).toBe(true);
+    const wrapper = trash.closest(".tooltip-wrap") as HTMLElement;
+    expect(wrapper.getAttribute("data-tooltip")).toBe(
+      "1 entrada sigue usando esta categoría.",
+    );
   });
 });
 
