@@ -57,6 +57,8 @@ tauri-build = { version = "2", optional = true , features = [] }
 [dev-dependencies]
 # Temporary databases for the vault-storage integration tests (task 2.3).
 tempfile = "3"
+# Wire-shape assertions for the serialized category DTOs.
+serde_json = "1"
 
 [profile.release]
 # Tauri recommends LTO and codegen-units=1 for release builds.
