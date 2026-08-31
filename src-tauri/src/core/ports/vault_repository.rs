@@ -4,7 +4,7 @@
 //! provided in Phase 2. Metadata (site, link, category, email, username) is
 //! stored plaintext and indexable, while passwords stay encrypted.
 
-use crate::core::domain::entry::{EntryRecord, Filters, RecordId};
+use crate::core::domain::entry::{Category, EntryRecord, Filters, RecordId};
 
 /// Persistence errors. Never carries secret material.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -31,4 +31,30 @@ pub trait VaultRepository {
 
     /// Delete an entry by its stable record ID.
     fn delete(&self, id: &RecordId) -> Result<(), RepositoryError>;
+
+    // -- category administration ---------------------------------------------
+
+    /// List categories in deterministic order: case-normalized name ascending,
+    /// exact name as the secondary tie-break key (category-administration
+    /// "Resolve ordering ties").
+    fn list_categories(&self) -> Result<Vec<Category>, RepositoryError>;
+
+    /// Exact (case-sensitive) existence check for `name`.
+    fn category_exists(&self, name: &str) -> Result<bool, RepositoryError>;
+
+    /// Persist a new category. Callers enforce the blank-name, palette, and
+    /// exact-duplicate rules before writing.
+    fn create_category(&self, category: &Category) -> Result<(), RepositoryError>;
+
+    /// Atomically rename/recolor `old` to `category`, cascading the rename to
+    /// every entry referencing `old`. Returns the number of entries updated by
+    /// the cascade; both writes commit or roll back together.
+    fn update_category(&self, old: &str, category: &Category) -> Result<usize, RepositoryError>;
+
+    /// Remove an unused category by exact name. Entries keep their plaintext
+    /// reference (no foreign key); the service refuses in-use deletions.
+    fn delete_category(&self, name: &str) -> Result<(), RepositoryError>;
+
+    /// Number of entries currently referencing `name`.
+    fn category_in_use(&self, name: &str) -> Result<usize, RepositoryError>;
 }

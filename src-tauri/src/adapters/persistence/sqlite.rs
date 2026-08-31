@@ -10,6 +10,10 @@
 //!   (site, link, category, email, username) plus the password as
 //!   nonce + ciphertext. The 16-byte record ID is stored verbatim so the
 //!   crypto layer can use it as AES-256-GCM AAD on every decrypt.
+//! - `categories` (schema v2) — one row per user-managed category: a unique
+//!   name (primary key, no foreign key by design) plus its palette color.
+//!   Pre-v2 vaults are migrated and seeded with the four current categories
+//!   (`ON CONFLICT DO NOTHING`, so reruns preserve custom values).
 //!
 //! Guarantees:
 //! - metadata stays queryable; the password is never written in plaintext;
@@ -23,11 +27,13 @@ use std::path::{Path, PathBuf};
 use rusqlite::types::ToSql;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 
-use crate::core::domain::entry::{EncryptedField, EntryRecord, Filters, RecordId};
+use crate::core::domain::entry::{
+    seed_categories, Category, EncryptedField, EntryRecord, Filters, RecordId,
+};
 use crate::core::ports::vault_repository::{RepositoryError, VaultRepository};
 
 /// Bumped whenever the schema changes; stored in `PRAGMA user_version`.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// Schema v1: vault metadata singleton + encrypted entries.
 const SCHEMA_V1: &str = "
@@ -49,6 +55,16 @@ CREATE TABLE IF NOT EXISTS entries (
 );
 CREATE INDEX IF NOT EXISTS idx_entries_category ON entries(category);
 CREATE INDEX IF NOT EXISTS idx_entries_email ON entries(email);
+";
+
+/// Schema v2: user-managed categories with unique names and palette colors.
+/// No foreign key on `entries.category` (design decision): the service guards
+/// references, and SQLite owns atomic persistence.
+const SCHEMA_V2: &str = "
+CREATE TABLE IF NOT EXISTS categories (
+    name    TEXT PRIMARY KEY NOT NULL,
+    color   TEXT NOT NULL
+);
 ";
 
 /// Vault initialization data: the salt and the authenticated validation record.
@@ -307,17 +323,136 @@ impl VaultRepository for SqliteVaultRepository {
         }
         tx.commit().map_err(store_err)
     }
+
+    // -- category administration ---------------------------------------------
+
+    fn list_categories(&self) -> Result<Vec<Category>, RepositoryError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT name, color FROM categories")
+            .map_err(store_err)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(Category {
+                    name: r.get(0)?,
+                    color: r.get(1)?,
+                })
+            })
+            .map_err(store_err)?;
+        let mut categories: Vec<Category> =
+            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(store_err)?;
+        // Deterministic order: case-normalized name ascending, exact name as
+        // the tie-breaker (category-administration "Resolve ordering ties").
+        categories.sort_by(|a, b| {
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        Ok(categories)
+    }
+
+    fn category_exists(&self, name: &str) -> Result<bool, RepositoryError> {
+        let exists: bool = self
+            .conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM categories WHERE name = ?1)",
+                params![name],
+                |r| r.get(0),
+            )
+            .map_err(store_err)?;
+        Ok(exists)
+    }
+
+    fn create_category(&self, category: &Category) -> Result<(), RepositoryError> {
+        self.conn
+            .execute(
+                "INSERT INTO categories (name, color) VALUES (?1, ?2)",
+                params![category.name, category.color],
+            )
+            .map_err(store_err)?;
+        Ok(())
+    }
+
+    fn update_category(&self, old: &str, category: &Category) -> Result<usize, RepositoryError> {
+        // One transaction: rename/recolor the category AND cascade the rename
+        // to every referencing entry, so both commit or both roll back.
+        let tx = self.conn.unchecked_transaction().map_err(store_err)?;
+        let updated = tx
+            .execute(
+                "UPDATE categories SET name = ?1, color = ?2 WHERE name = ?3",
+                params![category.name, category.color, old],
+            )
+            .map_err(store_err)?;
+        if updated == 0 {
+            // Missing target: dropping the transaction rolls back and reports
+            // the absent category without touching any entry.
+            return Err(RepositoryError::NotFound);
+        }
+        let affected = tx
+            .execute(
+                "UPDATE entries SET category = ?1 WHERE category = ?2",
+                params![category.name, old],
+            )
+            .map_err(store_err)?;
+        tx.commit().map_err(store_err)?;
+        Ok(affected)
+    }
+
+    fn delete_category(&self, name: &str) -> Result<(), RepositoryError> {
+        let removed = self
+            .conn
+            .execute("DELETE FROM categories WHERE name = ?1", params![name])
+            .map_err(store_err)?;
+        if removed == 0 {
+            return Err(RepositoryError::NotFound);
+        }
+        Ok(())
+    }
+
+    fn category_in_use(&self, name: &str) -> Result<usize, RepositoryError> {
+        let count: usize = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM entries WHERE category = ?1",
+                params![name],
+                |r| r.get(0),
+            )
+            .map_err(store_err)?;
+        Ok(count)
+    }
 }
 
-/// Apply pending migrations, tracked by `PRAGMA user_version`.
+/// Apply pending migrations, tracked by `PRAGMA user_version`. Each step runs
+/// only when the recorded version is older, so re-running on an up-to-date
+/// database (or a partially migrated one) is a safe no-op.
 fn migrate(conn: &Connection) -> Result<(), RepositoryError> {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(store_err)?;
     if version < 1 {
         conn.execute_batch(SCHEMA_V1).map_err(store_err)?;
+    }
+    if version < 2 {
+        conn.execute_batch(SCHEMA_V2).map_err(store_err)?;
+        seed_categories_table(conn)?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)
             .map_err(store_err)?;
+    }
+    Ok(())
+}
+
+/// Insert the four seeded categories with their migration colors. `ON CONFLICT
+/// DO NOTHING` keeps an existing row (including a custom color or a rerun on a
+/// migrated vault) untouched (vault-storage "Category schema migration").
+fn seed_categories_table(conn: &Connection) -> Result<(), RepositoryError> {
+    for category in seed_categories() {
+        conn.execute(
+            "INSERT INTO categories (name, color) VALUES (?1, ?2)
+             ON CONFLICT(name) DO NOTHING",
+            params![category.name, category.color],
+        )
+        .map_err(store_err)?;
     }
     Ok(())
 }

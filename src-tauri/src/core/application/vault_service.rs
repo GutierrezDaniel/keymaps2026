@@ -5,7 +5,8 @@
 //! derived key as a zeroizing [`VaultKey`]; plaintext never flows into metadata.
 
 use crate::core::domain::entry::{
-    is_valid_category, EntryDetails, EntryInput, EntryRecord, EntrySummary, Filters, RecordId,
+    is_valid_category_color, is_valid_category_name, Category, EntryDetails, EntryInput,
+    EntryRecord, EntrySummary, Filters, RecordId,
 };
 use crate::core::ports::cipher::{CipherPort, CryptoError, VaultKey};
 use crate::core::ports::key_derivation::KeyDerivationPort;
@@ -18,10 +19,33 @@ pub enum ServiceError {
     Crypto(#[from] CryptoError),
     #[error("repository failure: {0}")]
     Repository(#[from] RepositoryError),
-    #[error("invalid category: must be one of the initial categories")]
-    InvalidCategory,
+    #[error("category name must not be blank")]
+    BlankCategoryName,
+    #[error("category color must be one of the predefined swatches")]
+    InvalidCategoryColor,
+    #[error("a category with that exact name already exists")]
+    DuplicateCategory,
+    #[error("entry references a category that does not exist")]
+    UnknownCategory,
+    #[error("category is in use by entries and cannot be deleted")]
+    CategoryInUse,
+    #[error("the last category cannot be deleted")]
+    LastCategory,
+    #[error("category not found")]
+    CategoryNotFound,
     #[error("entry not found")]
     NotFound,
+}
+
+/// Outcome of a category update. Renames must be confirmed before any write;
+/// recolors apply directly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateCategoryResult {
+    /// The update (recolor or confirmed rename) was persisted.
+    Applied,
+    /// The requested rename was not confirmed: nothing was written and
+    /// `affected_entries` reports how many entries the cascade would touch.
+    RenamePreview { affected_entries: usize },
 }
 
 /// Use cases for managing vault entries.
@@ -143,11 +167,90 @@ where
         Ok(())
     }
 
+    // -- category administration ---------------------------------------------
+
+    /// List categories in deterministic case-normalized order (exact name as
+    /// the tie-breaker), as required by category-administration "ordering".
+    pub fn list_categories(&self) -> Result<Vec<Category>, ServiceError> {
+        Ok(self.repo.list_categories()?)
+    }
+
+    /// Create a category: rejects blank names, non-palette colors, and exact
+    /// duplicates without writing anything.
+    pub fn create_category(&self, category: &Category) -> Result<(), ServiceError> {
+        if !is_valid_category_name(&category.name) {
+            return Err(ServiceError::BlankCategoryName);
+        }
+        if !is_valid_category_color(&category.color) {
+            return Err(ServiceError::InvalidCategoryColor);
+        }
+        if self.repo.category_exists(&category.name)? {
+            return Err(ServiceError::DuplicateCategory);
+        }
+        self.repo.create_category(category)?;
+        Ok(())
+    }
+
+    /// Update a category.
+    ///
+    /// - Recolors (name unchanged) apply directly.
+    /// - Renames require `confirmed`: an unconfirmed rename performs no write
+    ///   and returns [`UpdateCategoryResult::RenamePreview`] with the affected
+    ///   entry count; a confirmed rename cascades through one atomic
+    ///   repository transaction.
+    pub fn update_category(
+        &self,
+        old_name: &str,
+        new_name: &str,
+        color: &str,
+        confirmed: bool,
+    ) -> Result<UpdateCategoryResult, ServiceError> {
+        if !is_valid_category_name(new_name) {
+            return Err(ServiceError::BlankCategoryName);
+        }
+        if !is_valid_category_color(color) {
+            return Err(ServiceError::InvalidCategoryColor);
+        }
+        if !self.repo.category_exists(old_name)? {
+            return Err(ServiceError::CategoryNotFound);
+        }
+        if old_name != new_name && self.repo.category_exists(new_name)? {
+            return Err(ServiceError::DuplicateCategory);
+        }
+        let category = Category::new(new_name.to_string(), color.to_string());
+        if old_name != new_name && !confirmed {
+            let affected_entries = self.repo.category_in_use(old_name)?;
+            return Ok(UpdateCategoryResult::RenamePreview { affected_entries });
+        }
+        self.repo.update_category(old_name, &category)?;
+        Ok(UpdateCategoryResult::Applied)
+    }
+
+    /// Delete an unused category, keeping at least one category in the vault.
+    /// Refuses in-use categories (references must be removed first) and the
+    /// last remaining category (safe-delete rules from category-administration).
+    pub fn delete_category(&self, name: &str) -> Result<(), ServiceError> {
+        if !self.repo.category_exists(name)? {
+            return Err(ServiceError::CategoryNotFound);
+        }
+        if self.repo.category_in_use(name)? > 0 {
+            return Err(ServiceError::CategoryInUse);
+        }
+        if self.repo.list_categories()?.len() <= 1 {
+            return Err(ServiceError::LastCategory);
+        }
+        self.repo.delete_category(name)?;
+        Ok(())
+    }
+
+    /// Repository-backed entry category validation: the name must exist in the
+    /// persisted category set (vault-entries "Accept a repository-backed custom
+    /// category").
     fn validate_category(&self, category: &str) -> Result<(), ServiceError> {
-        if is_valid_category(category) {
+        if self.repo.category_exists(category)? {
             Ok(())
         } else {
-            Err(ServiceError::InvalidCategory)
+            Err(ServiceError::UnknownCategory)
         }
     }
 }
@@ -159,17 +262,21 @@ mod tests {
     use secrecy::{ExposeSecret, SecretString};
 
     use super::*;
-    use crate::core::domain::entry::INITIAL_CATEGORIES;
+    use crate::core::domain::entry::seed_categories;
 
     /// In-memory fake repository used to exercise the use cases without SQLite.
+    /// Seeded with the four migration categories so entry validation is
+    /// repository-backed exactly like the real adapter.
     struct FakeRepo {
         records: Mutex<Vec<EntryRecord>>,
+        categories: Mutex<Vec<Category>>,
     }
 
     impl FakeRepo {
         fn new() -> Self {
             Self {
                 records: Mutex::new(Vec::new()),
+                categories: Mutex::new(seed_categories().to_vec()),
             }
         }
     }
@@ -231,6 +338,66 @@ mod tests {
             }
             Ok(())
         }
+
+        fn list_categories(&self) -> Result<Vec<Category>, RepositoryError> {
+            let mut categories = self.categories.lock().unwrap().clone();
+            categories.sort_by(|a, b| {
+                a.name
+                    .to_lowercase()
+                    .cmp(&b.name.to_lowercase())
+                    .then_with(|| a.name.cmp(&b.name))
+            });
+            Ok(categories)
+        }
+
+        fn category_exists(&self, name: &str) -> Result<bool, RepositoryError> {
+            Ok(self
+                .categories
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|c| c.name == name))
+        }
+
+        fn create_category(&self, category: &Category) -> Result<(), RepositoryError> {
+            self.categories.lock().unwrap().push(category.clone());
+            Ok(())
+        }
+
+        fn update_category(
+            &self,
+            old: &str,
+            category: &Category,
+        ) -> Result<usize, RepositoryError> {
+            let mut categories = self.categories.lock().unwrap();
+            if !categories.iter().any(|c| c.name == old) {
+                return Err(RepositoryError::NotFound);
+            }
+            if let Some(existing) = categories.iter_mut().find(|c| c.name == old) {
+                *existing = category.clone();
+            }
+            let mut records = self.records.lock().unwrap();
+            let affected = records.iter().filter(|e| e.category == old).count();
+            for entry in records.iter_mut().filter(|e| e.category == old) {
+                entry.category = category.name.clone();
+            }
+            Ok(affected)
+        }
+
+        fn delete_category(&self, name: &str) -> Result<(), RepositoryError> {
+            let mut categories = self.categories.lock().unwrap();
+            let before = categories.len();
+            categories.retain(|c| c.name != name);
+            if categories.len() == before {
+                return Err(RepositoryError::NotFound);
+            }
+            Ok(())
+        }
+
+        fn category_in_use(&self, name: &str) -> Result<usize, RepositoryError> {
+            let records = self.records.lock().unwrap();
+            Ok(records.iter().filter(|e| e.category == name).count())
+        }
     }
 
     fn id(n: u8) -> RecordId {
@@ -271,7 +438,7 @@ mod tests {
             .derive(password("hunter2"), &[7u8; 16])
             .unwrap();
         let rid = id(1);
-        svc.create_entry(rid, &key, &input(INITIAL_CATEGORIES[0], "github", "s3cret"))
+        svc.create_entry(rid, &key, &input("entretenimiento", "github", "s3cret"))
             .unwrap();
 
         let details = svc.get_entry_details(&rid, &key).unwrap();
@@ -280,30 +447,45 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_category() {
+    fn rejects_entry_with_unknown_category_without_writing() {
         let svc = service();
         let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
         let err = svc
             .create_entry(id(2), &key, &input("custom-cat", "x", "y"))
             .unwrap_err();
-        assert!(matches!(err, ServiceError::InvalidCategory));
+        assert!(matches!(err, ServiceError::UnknownCategory));
+        // No-write: the rejected entry must not be persisted.
+        assert!(svc.list_entries(&Filters::new()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn accepts_custom_repository_category_for_entries() {
+        let svc = service();
+        let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
+        // The repository now contains `lectura` (vault-entries "Accept a
+        // repository-backed custom category"), so entries may use it.
+        svc.create_category(&Category::new("lectura", "#8a4f7d"))
+            .unwrap();
+        svc.create_entry(id(6), &key, &input("lectura", "bookmarks", "p"))
+            .unwrap();
+        let list = svc.list_entries(&Filters::new()).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].category, "lectura");
     }
 
     #[test]
     fn filters_combine_conjunctively() {
         let svc = service();
         let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
-        svc.create_entry(id(3), &key, &input(INITIAL_CATEGORIES[1], "github", "a"))
+        svc.create_entry(id(3), &key, &input("trabajo", "github", "a"))
             .unwrap();
-        svc.create_entry(id(4), &key, &input(INITIAL_CATEGORIES[2], "gitlab", "b"))
+        svc.create_entry(id(4), &key, &input("estudio", "gitlab", "b"))
             .unwrap();
 
         let f = Filters::new().with_site("git");
         assert_eq!(svc.list_entries(&f).unwrap().len(), 2);
 
-        let f = Filters::new()
-            .with_site("git")
-            .with_category(INITIAL_CATEGORIES[1]);
+        let f = Filters::new().with_site("git").with_category("trabajo");
         let list = svc.list_entries(&f).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].site, "github");
@@ -313,9 +495,182 @@ mod tests {
     fn delete_removes_record() {
         let svc = service();
         let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
-        svc.create_entry(id(5), &key, &input(INITIAL_CATEGORIES[3], "site", "p"))
+        svc.create_entry(id(5), &key, &input("servicios", "site", "p"))
             .unwrap();
         svc.delete_entry(&id(5)).unwrap();
         assert!(svc.list_entries(&Filters::new()).unwrap().is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Category administration (category-administration spec).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn list_categories_is_seeded_and_deterministically_ordered() {
+        let svc = service();
+        let names: Vec<String> = svc
+            .list_categories()
+            .unwrap()
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        assert_eq!(
+            names,
+            ["entretenimiento", "estudio", "servicios", "trabajo"]
+        );
+    }
+
+    #[test]
+    fn create_category_rejects_blank_duplicate_and_non_palette_input() {
+        let svc = service();
+        // Blank name: rejected, no write.
+        assert!(matches!(
+            svc.create_category(&Category::new("   ", "#7a5220"))
+                .unwrap_err(),
+            ServiceError::BlankCategoryName
+        ));
+        // Color outside the palette: rejected, no write.
+        assert!(matches!(
+            svc.create_category(&Category::new("lectura", "#ff0000"))
+                .unwrap_err(),
+            ServiceError::InvalidCategoryColor
+        ));
+        // Exact duplicate: rejected, no write (case-sensitive comparison).
+        assert!(matches!(
+            svc.create_category(&Category::new("trabajo", "#7a5220"))
+                .unwrap_err(),
+            ServiceError::DuplicateCategory
+        ));
+        // A near duplicate with different case is NOT an exact duplicate.
+        svc.create_category(&Category::new("Trabajo", "#7a5220"))
+            .unwrap();
+        assert_eq!(svc.list_categories().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn recolor_applies_immediately_without_confirmation() {
+        let svc = service();
+        let result = svc
+            .update_category("trabajo", "trabajo", "#ad3a2d", false)
+            .unwrap();
+        assert_eq!(result, UpdateCategoryResult::Applied);
+        let trabajo = svc
+            .list_categories()
+            .unwrap()
+            .into_iter()
+            .find(|c| c.name == "trabajo")
+            .unwrap();
+        assert_eq!(trabajo.color, "#ad3a2d");
+    }
+
+    #[test]
+    fn unconfirmed_rename_previews_count_and_writes_nothing() {
+        let svc = service();
+        let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
+        // Three entries reference `trabajo`.
+        for n in 1..=3 {
+            svc.create_entry(id(n), &key, &input("trabajo", &format!("site{n}"), "p"))
+                .unwrap();
+        }
+
+        let result = svc
+            .update_category("trabajo", "laburo", "#ad3a2d", false)
+            .unwrap();
+        assert_eq!(
+            result,
+            UpdateCategoryResult::RenamePreview {
+                affected_entries: 3
+            }
+        );
+
+        // No write: category and every entry reference stay unchanged.
+        assert!(svc
+            .list_categories()
+            .unwrap()
+            .iter()
+            .any(|c| c.name == "trabajo"));
+        assert!(!svc
+            .list_categories()
+            .unwrap()
+            .iter()
+            .any(|c| c.name == "laburo"));
+        let entries = svc.list_entries(&Filters::new()).unwrap();
+        assert_eq!(entries.len(), 3);
+        assert!(entries.iter().all(|e| e.category == "trabajo"));
+    }
+
+    #[test]
+    fn confirmed_rename_cascades_to_all_referencing_entries() {
+        let svc = service();
+        let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
+        for n in 1..=3 {
+            svc.create_entry(id(n), &key, &input("trabajo", &format!("site{n}"), "p"))
+                .unwrap();
+        }
+
+        let result = svc
+            .update_category("trabajo", "laburo", "#ad3a2d", true)
+            .unwrap();
+        assert_eq!(result, UpdateCategoryResult::Applied);
+
+        assert!(svc
+            .list_categories()
+            .unwrap()
+            .iter()
+            .any(|c| c.name == "laburo"));
+        let entries = svc.list_entries(&Filters::new()).unwrap();
+        assert!(entries.iter().all(|e| e.category == "laburo"));
+    }
+
+    #[test]
+    fn rename_to_existing_name_is_rejected_without_write() {
+        let svc = service();
+        let result = svc
+            .update_category("trabajo", "servicios", "#ad3a2d", true)
+            .unwrap_err();
+        assert!(matches!(result, ServiceError::DuplicateCategory));
+        // Both categories remain, unchanged.
+        assert_eq!(svc.list_categories().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn delete_category_refuses_in_use_and_last_category() {
+        // In-use categories cannot be deleted.
+        let svc = service();
+        let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
+        svc.create_entry(id(7), &key, &input("trabajo", "github", "p"))
+            .unwrap();
+        assert!(matches!(
+            svc.delete_category("trabajo").unwrap_err(),
+            ServiceError::CategoryInUse
+        ));
+        assert!(matches!(
+            svc.delete_category("ghost").unwrap_err(),
+            ServiceError::CategoryNotFound
+        ));
+
+        // The last remaining category is protected even when unused.
+        let svc = service();
+        svc.delete_category("entretenimiento").unwrap();
+        svc.delete_category("estudio").unwrap();
+        svc.delete_category("servicios").unwrap();
+        assert_eq!(svc.list_categories().unwrap().len(), 1);
+        assert!(matches!(
+            svc.delete_category("trabajo").unwrap_err(),
+            ServiceError::LastCategory
+        ));
+    }
+
+    #[test]
+    fn delete_unused_category_succeeds_and_preserves_remaining() {
+        let svc = service();
+        svc.delete_category("servicios").unwrap();
+        let names: Vec<String> = svc
+            .list_categories()
+            .unwrap()
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        assert_eq!(names, ["entretenimiento", "estudio", "trabajo"]);
     }
 }

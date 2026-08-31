@@ -31,7 +31,7 @@ use crate::adapters::crypto::argon2_aes::Argon2Aes;
 use crate::adapters::persistence::sqlite::SqliteVaultRepository;
 use crate::core::application::vault_service::{ServiceError, VaultService};
 use crate::core::domain::entry::{
-    EntryDetails, EntryInput, EntryRecord, EntrySummary, Filters, RecordId,
+    Category, EntryDetails, EntryInput, EntryRecord, EntrySummary, Filters, RecordId,
 };
 use crate::core::ports::cipher::{CipherPort, CryptoError, VaultKey};
 use crate::core::ports::clipboard::{ClipboardError, ClipboardPort};
@@ -171,6 +171,18 @@ pub enum CommandError {
     VaultNotInitialized,
     #[error("vault is already initialized")]
     AlreadyInitialized,
+    #[error("category name must not be blank")]
+    BlankCategoryName,
+    #[error("category color must be one of the predefined swatches")]
+    InvalidCategoryColor,
+    #[error("a category with that exact name already exists")]
+    DuplicateCategory,
+    #[error("category is in use by entries and cannot be deleted")]
+    CategoryInUse,
+    #[error("the last category cannot be deleted")]
+    LastCategory,
+    #[error("category not found")]
+    CategoryNotFound,
     #[error("invalid category")]
     InvalidCategory,
     #[error("entry not found")]
@@ -207,7 +219,15 @@ impl From<ServiceError> for CommandError {
         match e {
             ServiceError::Crypto(c) => CommandError::Crypto(c.to_string()),
             ServiceError::Repository(r) => CommandError::from(r),
-            ServiceError::InvalidCategory => CommandError::InvalidCategory,
+            // Wire-stable entry error: the frontend already maps this kind
+            // (App.tsx "La categoría seleccionada no es válida").
+            ServiceError::UnknownCategory => CommandError::InvalidCategory,
+            ServiceError::BlankCategoryName => CommandError::BlankCategoryName,
+            ServiceError::InvalidCategoryColor => CommandError::InvalidCategoryColor,
+            ServiceError::DuplicateCategory => CommandError::DuplicateCategory,
+            ServiceError::CategoryInUse => CommandError::CategoryInUse,
+            ServiceError::LastCategory => CommandError::LastCategory,
+            ServiceError::CategoryNotFound => CommandError::CategoryNotFound,
             ServiceError::NotFound => CommandError::NotFound,
         }
     }
@@ -367,6 +387,30 @@ impl VaultRepository for Arc<Mutex<SqliteVaultRepository>> {
 
     fn delete(&self, id: &RecordId) -> Result<(), RepositoryError> {
         self.lock().unwrap().delete(id)
+    }
+
+    fn list_categories(&self) -> Result<Vec<Category>, RepositoryError> {
+        self.lock().unwrap().list_categories()
+    }
+
+    fn category_exists(&self, name: &str) -> Result<bool, RepositoryError> {
+        self.lock().unwrap().category_exists(name)
+    }
+
+    fn create_category(&self, category: &Category) -> Result<(), RepositoryError> {
+        self.lock().unwrap().create_category(category)
+    }
+
+    fn update_category(&self, old: &str, category: &Category) -> Result<usize, RepositoryError> {
+        self.lock().unwrap().update_category(old, category)
+    }
+
+    fn delete_category(&self, name: &str) -> Result<(), RepositoryError> {
+        self.lock().unwrap().delete_category(name)
+    }
+
+    fn category_in_use(&self, name: &str) -> Result<usize, RepositoryError> {
+        self.lock().unwrap().category_in_use(name)
     }
 }
 
@@ -753,7 +797,7 @@ mod tests {
 
     use super::*;
     use crate::adapters::clipboard::tests::FakeClipboard;
-    use crate::core::domain::entry::{Filters, INITIAL_CATEGORIES};
+    use crate::core::domain::entry::Filters;
     use tempfile::TempDir;
 
     const MASTER_PASSWORD: &str = "correct horse battery staple";
@@ -800,7 +844,8 @@ mod tests {
             secret(password),
             "a@b.c",
             "user",
-            INITIAL_CATEGORIES[0],
+            // A seeded category: valid through the repository-backed check.
+            "entretenimiento",
         )
     }
 
@@ -1070,7 +1115,7 @@ mod tests {
             secret("b"),
             "team@example.com",
             "user",
-            INITIAL_CATEGORIES[0],
+            "entretenimiento",
         );
         app.create_entry(&team).unwrap();
 
