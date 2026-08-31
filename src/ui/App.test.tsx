@@ -9,7 +9,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, within, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import App from "./App";
-import type { EntrySummary, EntryDetails } from "./api";
+import type { EntrySummary, EntryDetails, CategoryDto } from "./api";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -25,6 +25,15 @@ const ENTRY: EntrySummary = {
 };
 
 const DETAILS: EntryDetails = { summary: ENTRY, password: "s3cr3t" };
+
+/** Repository category map (deterministic alphabetical order, as the backend
+ *  lists it): the four seeds with their migration colors. */
+const CATEGORIES: CategoryDto[] = [
+  { name: "entretenimiento", color: "#7a5220" },
+  { name: "estudio", color: "#2f6b3f" },
+  { name: "servicios", color: "#6a4a8f" },
+  { name: "trabajo", color: "#2f5d8c" },
+];
 
 /** Route mocked invoke by command name. Handlers throw to reject. An unlisted
  *  `list_emails` route resolves to an empty list: the App loads the email
@@ -42,9 +51,12 @@ function mockRoutes(routes: Record<string, (args?: unknown) => unknown>) {
   });
 }
 
+/** Boot straight into an unlocked vault. The category map and the email
+ *  selector load with the vault, so both routes are registered. */
 function bootUnlocked() {
   mockRoutes({
     list: () => [ENTRY],
+    list_categories: () => CATEGORIES,
   });
   return render(<App />);
 }
@@ -136,6 +148,7 @@ describe("App — login and backoff", () => {
         unlocked = true;
       },
       get_entry_details: () => DETAILS,
+      list_categories: () => CATEGORIES,
     });
     render(<App />);
     await screen.findByLabelText("Contraseña maestra");
@@ -240,6 +253,7 @@ describe("App — unlocked vault interactions", () => {
   it("locks explicitly and shows the locked warning", async () => {
     mockRoutes({
       list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
       lock: () => undefined,
     });
     render(<App />);
@@ -256,6 +270,7 @@ describe("App — unlocked vault interactions", () => {
   it("opens the unified entry modal on card click, fetches details and keeps the password masked", async () => {
     mockRoutes({
       list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
       get_entry_details: () => DETAILS,
     });
     render(<App />);
@@ -273,6 +288,7 @@ describe("App — unlocked vault interactions", () => {
   it("copies a field through the command surface and shows Copiado", async () => {
     mockRoutes({
       list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
       get_entry_details: () => DETAILS,
       copy_field: () => undefined,
     });
@@ -290,6 +306,7 @@ describe("App — unlocked vault interactions", () => {
     let listResult: EntrySummary[] = [ENTRY];
     mockRoutes({
       list: () => listResult,
+      list_categories: () => CATEGORIES,
       get_entry_details: () => DETAILS,
       delete: () => {
         listResult = [];
@@ -317,6 +334,7 @@ describe("App — unlocked vault interactions", () => {
   it("pre-fills the unified modal from the entry when a card is opened", async () => {
     mockRoutes({
       list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
       get_entry_details: () => DETAILS,
     });
     render(<App />);
@@ -339,6 +357,7 @@ describe("App — unlocked vault interactions", () => {
   it("saves a new entry from the form modal", async () => {
     mockRoutes({
       list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
       create: () => "id-2",
     });
     render(<App />);
@@ -369,6 +388,7 @@ describe("App — unlocked vault interactions", () => {
   it("opens a clean new-entry form after a save (no stale inputs)", async () => {
     mockRoutes({
       list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
       create: () => "id-2",
     });
     render(<App />);
@@ -392,6 +412,7 @@ describe("App — unlocked vault interactions", () => {
   it("loads the distinct emails into the email dropdown when unlocked", async () => {
     mockRoutes({
       list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
       list_emails: () => ["ana@example.com", "bob@example.com"],
     });
     render(<App />);
@@ -405,6 +426,36 @@ describe("App — unlocked vault interactions", () => {
     expect(within(listbox).getByRole("option", { name: "bob@example.com" })).toBeTruthy();
   });
 
+  it("loads the repository categories into the category filter dropdown when unlocked", async () => {
+    bootUnlocked();
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    expect(mockedInvoke).toHaveBeenCalledWith("list_categories");
+    fireEvent.click(screen.getByRole("button", { name: "Filtrar por categoría" }));
+    const listbox = screen.getByRole("listbox", { name: "Filtrar por categoría" });
+    for (const category of CATEGORIES) {
+      expect(within(listbox).getByRole("option", { name: category.name })).toBeTruthy();
+    }
+  });
+
+  it("paints entry cards with the mapped category color and falls back for unknown categories", async () => {
+    const unknownEntry: EntrySummary = { ...ENTRY, id: "id-2", site: "Ghost", category: "fantasma" };
+    mockRoutes({
+      list: () => [ENTRY, unknownEntry],
+      list_categories: () => CATEGORIES,
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    const cards = screen.getAllByTestId("entry-card");
+    const knownCard = cards.find((card) => card.getAttribute("data-category") === "trabajo") as HTMLElement;
+    const unknownCard = cards.find((card) => card.getAttribute("data-category") === "fantasma") as HTMLElement;
+    // Known category → the repository color (trabajo → #2f5d8c).
+    expect(knownCard.style.getPropertyValue("--category-color")).toBe("#2f5d8c");
+    // Unknown category → no inline variable, so the CSS fallback token applies.
+    expect(unknownCard.style.getPropertyValue("--category-color")).toBe("");
+  });
+
   it("filters the vault list when an email is selected in the dropdown", async () => {
     mockRoutes({
       list: (args) => {
@@ -413,6 +464,7 @@ describe("App — unlocked vault interactions", () => {
         if (filters?.email) return [];
         return [ENTRY];
       },
+      list_categories: () => CATEGORIES,
       list_emails: () => ["ana@example.com"],
     });
     render(<App />);
@@ -432,6 +484,7 @@ describe("App — unlocked vault interactions", () => {
   it("returns to the locked screen when a command reports the vault auto-locked", async () => {
     mockRoutes({
       list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
       get_entry_details: () => DETAILS,
       copy_field: () => {
         throw "Locked";

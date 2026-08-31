@@ -17,6 +17,9 @@
   --red-quiet: #8f4a3c;
   --blue: #2f5d8c;
   --blue-deep: #26496e;
+  /* Fallback chip color for entries whose category is absent from the
+     repository map (unknown categories). */
+  --category-fallback: var(--blue);
   --green: #2f6b3f;
   --gold: #86601f;
   --gold-deep: #6e4d18;
@@ -699,7 +702,10 @@ input.filter-input.searchbox {
   height: 9.5rem;
   background: var(--paper-raised);
   border: 1px solid var(--line);
-  border-top: 4px solid var(--blue);
+  /* The category chip color comes from the repository map as the inline
+     `--category-color` custom property; unknown categories fall back to the
+     blue token. */
+  border-top: 4px solid var(--category-color, var(--category-fallback));
   /* Square top corners so the category chip flows like a file tab; only the
      bottom corners round. */
   border-radius: 0 0 var(--radius) var(--radius);
@@ -707,22 +713,6 @@ input.filter-input.searchbox {
   transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1),
     box-shadow 0.22s ease-out, border-color 0.22s ease-out;
   animation: card-enter 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.entry-card[data-category="trabajo"] {
-  border-top-color: var(--blue);
-}
-
-.entry-card[data-category="estudio"] {
-  border-top-color: var(--green);
-}
-
-.entry-card[data-category="entretenimiento"] {
-  border-top-color: #7a5220;
-}
-
-.entry-card[data-category="servicios"] {
-  border-top-color: #6a4a8f;
 }
 
 /* Hover: the card lifts like a file tab under the finger. */

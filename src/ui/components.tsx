@@ -5,7 +5,7 @@
 // callbacks, and never talk to the backend directly — which keeps them
 // testable headless.
 import { useEffect, useRef, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
+import type { CSSProperties, FormEvent, ReactNode } from "react";
 import {
   AtSign,
   Check,
@@ -17,9 +17,24 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { CATEGORIES } from "./api";
-import type { EntrySummary, EntryInput, Filters, CopyField } from "./api";
+import type { EntrySummary, EntryInput, Filters, CopyField, CategoryDto } from "./api";
 import "./styles.css";
+
+// ---------------------------------------------------------------------------
+// Category ordering (vault-entries "Category selectors are ordered"): the
+// modal and every selector show categories in deterministic alphabetical
+// order — case-normalized primary key, exact name as the secondary key.
+// ---------------------------------------------------------------------------
+
+function sortCategories(categories: CategoryDto[]): CategoryDto[] {
+  return [...categories].sort((a, b) => {
+    const lowerA = a.name.toLowerCase();
+    const lowerB = b.name.toLowerCase();
+    if (lowerA !== lowerB) return lowerA < lowerB ? -1 : 1;
+    if (a.name !== b.name) return a.name < b.name ? -1 : 1;
+    return 0;
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Masked password with reveal/hide toggle (vault-ui "Password masking").
@@ -87,6 +102,9 @@ function CopyButton({ label, onCopy }: { label: string; onCopy: () => void }) {
 
 export interface EntryCardProps {
   entry: EntrySummary;
+  /** Category color from the repository map. Absent for unknown categories,
+   *  so the card falls back to the CSS `--category-fallback` token. */
+  color?: string;
   /** True while the card is animating out before deletion. */
   leaving?: boolean;
   /** True while this card is the origin of a card→modal morph (it shares the
@@ -98,10 +116,11 @@ export interface EntryCardProps {
 }
 
 /** A card whose front shows only the site name; the category is carried by a
- *  colored top chip (data-category drives the ink color). Clicking opens the
- *  details modal. */
+ *  colored top chip (`--category-color` drives the ink color, with a CSS
+ *  fallback for unknown categories). Clicking opens the details modal. */
 export function EntryCard({
   entry,
+  color,
   leaving = false,
   morphOrigin = false,
   onOpen,
@@ -109,6 +128,7 @@ export function EntryCard({
   return (
     <article
       className={`entry-card${leaving ? " leaving" : ""}${morphOrigin ? " morph-origin" : ""}`}
+      style={color ? ({ "--category-color": color } as CSSProperties) : undefined}
       data-testid="entry-card"
       data-category={entry.category}
     >
@@ -133,13 +153,15 @@ export function EntryCard({
 
 export interface CategorySelectProps {
   value: string;
+  /** Repository categories; rendered alphabetically (ties by exact name). */
+  categories: CategoryDto[];
   onChange: (category: string) => void;
 }
 
 /** The entry sheet's category picker. A native <select> opens its options
  *  with the OS theme (white in WebKit/GTK) no matter the CSS, so the modal
  *  uses the same themed listbox pattern as the vault filters. */
-export function CategorySelect({ value, onChange }: CategorySelectProps) {
+export function CategorySelect({ value, categories, onChange }: CategorySelectProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -153,6 +175,8 @@ export function CategorySelect({ value, onChange }: CategorySelectProps) {
     document.addEventListener("mousedown", onDocMouseDown);
     return () => document.removeEventListener("mousedown", onDocMouseDown);
   }, [open]);
+
+  const options = sortCategories(categories);
 
   return (
     <div className="category-select" ref={rootRef}>
@@ -169,19 +193,19 @@ export function CategorySelect({ value, onChange }: CategorySelectProps) {
       </button>
       {open && (
         <div className="filter-listbox category-listbox" role="listbox" aria-label="Categoría">
-          {CATEGORIES.map((option) => (
+          {options.map((option) => (
             <button
-              key={option}
+              key={option.name}
               type="button"
               role="option"
-              aria-selected={option === value}
-              className={`filter-option${option === value ? " selected" : ""}`}
+              aria-selected={option.name === value}
+              className={`filter-option${option.name === value ? " selected" : ""}`}
               onClick={() => {
-                onChange(option);
+                onChange(option.name);
                 setOpen(false);
               }}
             >
-              {option}
+              {option.name}
             </button>
           ))}
         </div>
@@ -201,6 +225,9 @@ export interface EntryModalProps {
   open: boolean;
   /** Entry being viewed/edited, or null for a new entry. */
   initial: EntrySummary | null;
+  /** Repository categories for the picker (alphabetical); a new entry
+   *  defaults to the first one, an existing entry keeps its own value. */
+  categories: CategoryDto[];
   /** Decrypted password for an existing entry (prefill); empty for new. */
   initialPassword?: string;
   /** True while a card→modal view transition is morphing this sheet in; the
@@ -223,6 +250,7 @@ interface FieldErrors {
 export function EntryModal({
   open,
   initial,
+  categories,
   initialPassword = "",
   morphing = false,
   onSave,
@@ -235,7 +263,7 @@ export function EntryModal({
   const [password, setPassword] = useState(initialPassword);
   const [email, setEmail] = useState(initial?.email ?? "");
   const [username, setUsername] = useState(initial?.username ?? "");
-  const [category, setCategory] = useState(initial?.category ?? CATEGORIES[0]);
+  const [category, setCategory] = useState(initial?.category ?? categories[0]?.name ?? "");
   const [errors, setErrors] = useState<FieldErrors>({});
   const [revealPassword, setRevealPassword] = useState(false);
   const isExisting = initial !== null;
@@ -251,7 +279,7 @@ export function EntryModal({
     setPassword(initialPassword);
     setEmail(initial?.email ?? "");
     setUsername(initial?.username ?? "");
-    setCategory(initial?.category ?? CATEGORIES[0]);
+    setCategory(initial?.category ?? categories[0]?.name ?? "");
     setErrors({});
     setRevealPassword(false);
   }, [open]);
@@ -312,7 +340,7 @@ export function EntryModal({
         <div className="field-control">
           <label htmlFor="field-category">Categoría</label>
           <div className="field-row-inline">
-            <CategorySelect value={category} onChange={setCategory} />
+            <CategorySelect value={category} categories={categories} onChange={setCategory} />
           </div>
         </div>
 
@@ -447,6 +475,8 @@ export function DeleteConfirm({ entry, onConfirm, onCancel }: DeleteConfirmProps
 
 export interface SearchFiltersProps {
   filters: Filters;
+  /** Repository categories for the filter dropdown (alphabetical). */
+  categories: CategoryDto[];
   /** Complete distinct email set from the repository — never derived from the
    *  loaded entry list, which a filter can shrink to a subset. */
   emails: string[];
@@ -541,7 +571,7 @@ function FilterListbox({
 /** Site searchbox plus category and email dropdowns, all conjunctive. The
  *  email options come from the backend so the selector stays complete even
  *  while a filter shrinks the loaded entries. */
-export function SearchFilters({ filters, emails, onChange }: SearchFiltersProps) {
+export function SearchFilters({ filters, categories, emails, onChange }: SearchFiltersProps) {
   return (
     <div className="filters">
       <div className="search-shell">
@@ -559,7 +589,10 @@ export function SearchFilters({ filters, emails, onChange }: SearchFiltersProps)
         triggerLabel="Filtrar por categoría"
         emptyLabel="Todas las categorías"
         value={filters.category ?? null}
-        options={CATEGORIES.map((category) => ({ value: category, label: category }))}
+        options={sortCategories(categories).map((category) => ({
+          value: category.name,
+          label: category.name,
+        }))}
         onChange={(category) => onChange({ ...filters, category })}
         icon={<ListFilter size={17} />}
       />

@@ -5,7 +5,7 @@
 // dropdown filters, and the login backoff countdown.
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, within, act } from "@testing-library/react";
-import type { EntrySummary } from "./api";
+import type { EntrySummary, CategoryDto } from "./api";
 import {
   EntryCard,
   EntryModal,
@@ -24,6 +24,15 @@ const SUMMARY: EntrySummary = {
   category: "trabajo",
 };
 
+/** Repository-backed categories fixture (alphabetical, as the backend lists
+ *  them): the four seeds with their migration colors. */
+const CATEGORIES: CategoryDto[] = [
+  { name: "entretenimiento", color: "#7a5220" },
+  { name: "estudio", color: "#2f6b3f" },
+  { name: "servicios", color: "#6a4a8f" },
+  { name: "trabajo", color: "#2f5d8c" },
+];
+
 function renderCard(overrides: Partial<Parameters<typeof EntryCard>[0]> = {}) {
   return render(
     <EntryCard entry={SUMMARY} onOpen={() => undefined} {...overrides} />,
@@ -35,6 +44,7 @@ function renderDetailsModal() {
     <EntryModal
       open
       initial={SUMMARY}
+      categories={CATEGORIES}
       initialPassword="s3cr3t"
       onSave={() => undefined}
       onCancel={() => undefined}
@@ -85,6 +95,18 @@ describe("EntryCard — summary card and category color chip", () => {
     const card = screen.getByTestId("entry-card");
     expect(card.classList.contains("morph-origin")).toBe(true);
   });
+
+  it("paints the chip with the repository color via the CSS custom property", () => {
+    renderCard({ color: "#c05640" });
+    const card = screen.getByTestId("entry-card");
+    expect(card.style.getPropertyValue("--category-color")).toBe("#c05640");
+  });
+
+  it("leaves the CSS variable unset for an unknown category so the fallback applies", () => {
+    renderCard();
+    const card = screen.getByTestId("entry-card");
+    expect(card.style.getPropertyValue("--category-color")).toBe("");
+  });
 });
 
 describe("EntryModal — unified create/view/edit sheet", () => {
@@ -121,13 +143,36 @@ describe("EntryModal — unified create/view/edit sheet", () => {
 
   it("starts an existing entry prefilled and a new entry empty", () => {
     const { rerender } = render(
-      <EntryModal open initial={SUMMARY} initialPassword="s3cr3t" onSave={() => undefined} onCancel={() => undefined} />,
+      <EntryModal
+        open
+        initial={SUMMARY}
+        categories={CATEGORIES}
+        initialPassword="s3cr3t"
+        onSave={() => undefined}
+        onCancel={() => undefined}
+      />,
     );
     expect(screen.getByLabelText(/Sitio/)).toHaveProperty("value", "GitHub");
 
     // Closing and reopening for a new entry must not leak the previous values.
-    rerender(<EntryModal open={false} initial={null} onSave={() => undefined} onCancel={() => undefined} />);
-    rerender(<EntryModal open initial={null} onSave={() => undefined} onCancel={() => undefined} />);
+    rerender(
+      <EntryModal
+        open={false}
+        initial={null}
+        categories={CATEGORIES}
+        onSave={() => undefined}
+        onCancel={() => undefined}
+      />,
+    );
+    rerender(
+      <EntryModal
+        open
+        initial={null}
+        categories={CATEGORIES}
+        onSave={() => undefined}
+        onCancel={() => undefined}
+      />,
+    );
     expect(screen.getByLabelText(/Sitio/)).toHaveProperty("value", "");
     expect(screen.getByLabelText(/Contraseña/)).toHaveProperty("value", "");
   });
@@ -153,7 +198,15 @@ describe("EntryModal — unified create/view/edit sheet", () => {
   });
 
   it("does not offer copy or delete actions for a new entry", () => {
-    render(<EntryModal open initial={null} onSave={() => undefined} onCancel={() => undefined} />);
+    render(
+      <EntryModal
+        open
+        initial={null}
+        categories={CATEGORIES}
+        onSave={() => undefined}
+        onCancel={() => undefined}
+      />,
+    );
     expect(screen.getByRole("heading", { name: "Nueva entrada" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Copiar contraseña" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Eliminar" })).toBeNull();
@@ -163,7 +216,15 @@ describe("EntryModal — unified create/view/edit sheet", () => {
 describe("EntryModal — Spanish validation", () => {
   it("keeps the modal open and shows a Spanish message for a missing required field", () => {
     const onSave = vi.fn();
-    render(<EntryModal open initial={null} onSave={onSave} onCancel={() => undefined} />);
+    render(
+      <EntryModal
+        open
+        initial={null}
+        categories={CATEGORIES}
+        onSave={onSave}
+        onCancel={() => undefined}
+      />,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Guardar" }));
 
@@ -175,7 +236,15 @@ describe("EntryModal — Spanish validation", () => {
 
   it("submits a valid form with the six field values", () => {
     const onSave = vi.fn();
-    render(<EntryModal open initial={null} onSave={onSave} onCancel={() => undefined} />);
+    render(
+      <EntryModal
+        open
+        initial={null}
+        categories={CATEGORIES}
+        onSave={onSave}
+        onCancel={() => undefined}
+      />,
+    );
 
     fireEvent.change(screen.getByLabelText(/Sitio/), { target: { value: "GitLab" } });
     fireEvent.change(screen.getByLabelText(/Enlace/), {
@@ -205,7 +274,7 @@ describe("EntryModal — Spanish validation", () => {
 describe("SearchFilters — site searchbox and icon-triggered dropdowns", () => {
   it("sends the typed site value as a filter from the searchbox", () => {
     const onChange = vi.fn();
-    render(<SearchFilters filters={{}} emails={[]} onChange={onChange} />);
+    render(<SearchFilters filters={{}} categories={CATEGORIES} emails={[]} onChange={onChange} />);
 
     fireEvent.change(screen.getByLabelText("Buscar por sitio"), {
       target: { value: "GitHub" },
@@ -218,6 +287,7 @@ describe("SearchFilters — site searchbox and icon-triggered dropdowns", () => 
     render(
       <SearchFilters
         filters={{ site: "GitHub", email: "ana@example.com" }}
+        categories={CATEGORIES}
         emails={["ana@example.com"]}
         onChange={onChange}
       />,
@@ -231,6 +301,7 @@ describe("SearchFilters — site searchbox and icon-triggered dropdowns", () => 
     render(
       <SearchFilters
         filters={{}}
+        categories={CATEGORIES}
         emails={["ana@example.com", "bob@example.com"]}
         onChange={() => undefined}
       />,
@@ -247,7 +318,12 @@ describe("SearchFilters — site searchbox and icon-triggered dropdowns", () => 
   it("emits the selected email as a filter", () => {
     const onChange = vi.fn();
     render(
-      <SearchFilters filters={{}} emails={["ana@example.com"]} onChange={onChange} />,
+      <SearchFilters
+        filters={{}}
+        categories={CATEGORIES}
+        emails={["ana@example.com"]}
+        onChange={onChange}
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Filtrar por correo" }));
@@ -261,6 +337,7 @@ describe("SearchFilters — site searchbox and icon-triggered dropdowns", () => 
     render(
       <SearchFilters
         filters={{ site: "GitHub", email: "ana@example.com" }}
+        categories={CATEGORIES}
         emails={["ana@example.com"]}
         onChange={onChange}
       />,
@@ -272,16 +349,40 @@ describe("SearchFilters — site searchbox and icon-triggered dropdowns", () => 
     expect(onChange).toHaveBeenCalledWith({ site: "GitHub", email: null });
   });
 
-  it("opens the category dropdown with all four categories", () => {
-    render(<SearchFilters filters={{}} emails={[]} onChange={() => undefined} />);
+  it("opens the category dropdown with the repository categories", () => {
+    render(<SearchFilters filters={{}} categories={CATEGORIES} emails={[]} onChange={() => undefined} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Filtrar por categoría" }));
 
     const listbox = screen.getByRole("listbox", { name: "Filtrar por categoría" });
     expect(within(listbox).getByRole("option", { name: "Todas las categorías" })).toBeTruthy();
-    for (const category of ["entretenimiento", "trabajo", "estudio", "servicios"]) {
-      expect(within(listbox).getByRole("option", { name: category })).toBeTruthy();
+    for (const category of CATEGORIES) {
+      expect(within(listbox).getByRole("option", { name: category.name })).toBeTruthy();
     }
+  });
+
+  it("lists the category options in deterministic alphabetical order", () => {
+    render(
+      <SearchFilters
+        filters={{}}
+        categories={[
+          { name: "trabajo", color: "#2f5d8c" },
+          { name: "Alfa", color: "#c05640" },
+          { name: "alfa", color: "#b76e2b" },
+        ]}
+        emails={[]}
+        onChange={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Filtrar por categoría" }));
+
+    const listbox = screen.getByRole("listbox", { name: "Filtrar por categoría" });
+    const labels = within(listbox)
+      .getAllByRole("option")
+      .map((option) => option.textContent);
+    // Case-normalized primary order (Alfa/alfa tie) then exact-name tie-break.
+    expect(labels).toEqual(["Todas las categorías", "Alfa", "alfa", "trabajo"]);
   });
 });
 

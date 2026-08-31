@@ -15,12 +15,6 @@ import { invoke } from "@tauri-apps/api/core";
 // Domain types (design "Interfaces / Contracts").
 // ---------------------------------------------------------------------------
 
-/** Fixed initial category names — LEGACY: superseded by `list_categories`.
- *  Kept only until the components migrate to the dynamic category map. */
-const CATEGORIES = ["entretenimiento", "trabajo", "estudio", "servicios"] as const;
-
-type Category = (typeof CATEGORIES)[number];
-
 /** Wire form of a category: a display name and one palette color —
  *  `CategoryDto` in tauri.rs. */
 interface CategoryDto {
@@ -281,9 +275,8 @@ const api = {
   },
 };
 
-export { api, toCommandError, CATEGORIES, CATEGORY_PALETTE };
+export { api, toCommandError, CATEGORY_PALETTE };
 export type {
-  Category,
   CategoryDto,
   UpdateCategoryRequest,
   UpdateCategoryResult,

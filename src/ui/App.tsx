@@ -11,7 +11,15 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Lock, Plus } from "lucide-react";
 import { api, toCommandError } from "./api";
-import type { EntrySummary, EntryDetails, EntryInput, Filters, CopyField, CommandError } from "./api";
+import type {
+  EntrySummary,
+  EntryDetails,
+  EntryInput,
+  Filters,
+  CopyField,
+  CommandError,
+  CategoryDto,
+} from "./api";
 import {
   BackoffNotice,
   DeleteConfirm,
@@ -208,6 +216,10 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>("booting");
   const [entries, setEntries] = useState<EntrySummary[]>([]);
   const [emails, setEmails] = useState<string[]>([]);
+  /** Repository categories (deterministic alphabetical order from the
+   *  backend); drives the admin modal, entry-form selectors, filters and the
+   *  card color map. */
+  const [categories, setCategories] = useState<CategoryDto[]>([]);
   const [filters, setFilters] = useState<Filters>({});
   const [details, setDetails] = useState<Record<string, EntryDetails>>({});
   const [leavingId, setLeavingId] = useState<string | null>(null);
@@ -233,6 +245,7 @@ export default function App() {
     setPhase("locked");
     setEntries([]);
     setEmails([]);
+    setCategories([]);
     setDetails({});
     setLeavingId(null);
     setEditing(null);
@@ -241,6 +254,22 @@ export default function App() {
     setMorphOriginId(null);
     setMorphActive(false);
     setNotice(null);
+  }
+
+  /** Refresh the category map from the repository. Categories only change
+   *  through the administration modal, so this runs after unlock and after
+   *  every category mutation (never on plain list refreshes). */
+  async function loadCategories(): Promise<void> {
+    try {
+      setCategories(await api.listCategories());
+    } catch (raw) {
+      const commandError = toCommandError(raw);
+      if (commandError.kind === "Locked") {
+        lockScreen();
+      } else {
+        setError(spanishMessage(commandError));
+      }
+    }
   }
 
   /** Refresh the email selector options from the repository. The complete
@@ -289,6 +318,7 @@ export default function App() {
         setEntries(list);
         setPhase("unlocked");
         void loadEmails();
+        void loadCategories();
       })
       .catch((raw) => {
         if (cancelled) return;
@@ -330,6 +360,7 @@ export default function App() {
       setNotice(null);
       // Breaking the seal: the locked sheet folds away and the vault rises.
       withViewTransition(() => applyList(filtersRef.current), true);
+      void loadCategories();
     } catch (raw) {
       const commandError = toCommandError(raw);
       if (commandError.kind === "Backoff") {
@@ -540,6 +571,12 @@ export default function App() {
 
   const hasFilters = Boolean(filters.site || filters.category || filters.email);
 
+  /** Color for an entry's category chip from the repository map; undefined
+   *  for unknown categories, so the card renders the CSS fallback. */
+  function categoryColor(name: string): string | undefined {
+    return categories.find((category) => category.name === name)?.color;
+  }
+
   return (
     <div className="app-shell">
       <header className="vault-header">
@@ -562,7 +599,12 @@ export default function App() {
       )}
       {notice && <p className="notice">{notice}</p>}
 
-      <SearchFilters filters={filters} emails={emails} onChange={handleFiltersChange} />
+      <SearchFilters
+        filters={filters}
+        categories={categories}
+        emails={emails}
+        onChange={handleFiltersChange}
+      />
 
       {entries.length === 0 ? (
         <p className="empty-state">
@@ -576,6 +618,7 @@ export default function App() {
             <EntryCard
               key={entry.id}
               entry={entry}
+              color={categoryColor(entry.category)}
               leaving={leavingId === entry.id}
               morphOrigin={morphOriginId === entry.id}
               onOpen={(origin) => void openEditEntry(entry, origin)}
@@ -588,6 +631,7 @@ export default function App() {
         key={editing?.id ?? "new"}
         open={formOpen}
         initial={editing}
+        categories={categories}
         initialPassword={editing ? (details[editing.id]?.password ?? "") : ""}
         morphing={morphActive}
         onSave={handleSave}
