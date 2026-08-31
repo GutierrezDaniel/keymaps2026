@@ -17,6 +17,9 @@
   --red-quiet: #8f4a3c;
   --blue: #2f5d8c;
   --blue-deep: #26496e;
+  /* Fallback chip color for entries whose category is absent from the
+     repository map (unknown categories). */
+  --category-fallback: var(--blue);
   --green: #2f6b3f;
   --gold: #86601f;
   --gold-deep: #6e4d18;
@@ -481,6 +484,19 @@ html.phase-transition::view-transition-new(root) {
   background: var(--red-paper);
 }
 
+/* Disabled ink controls (e.g. the category trash for in-use or last
+   categories): gray out the icon, drop the hover/active affordances, and
+   show the not-allowed cursor while the tooltip explains why. */
+.icon-button:disabled,
+.icon-button:disabled:hover {
+  color: var(--ink-muted);
+  border-color: transparent;
+  background: transparent;
+  cursor: not-allowed;
+  opacity: 0.5;
+  transform: none;
+}
+
 /* ------------------------------------------------------------------ */
 /* Vault header + filters                                              */
 /* ------------------------------------------------------------------ */
@@ -508,6 +524,14 @@ html.phase-transition::view-transition-new(root) {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+}
+
+/* The secondary header action (e.g. "Administrar categorías") keeps the
+   icon and label on one line. */
+.vault-actions .action-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 
 .vault-header .primary-button {
@@ -699,7 +723,10 @@ input.filter-input.searchbox {
   height: 9.5rem;
   background: var(--paper-raised);
   border: 1px solid var(--line);
-  border-top: 4px solid var(--blue);
+  /* The category chip color comes from the repository map as the inline
+     `--category-color` custom property; unknown categories fall back to the
+     blue token. */
+  border-top: 4px solid var(--category-color, var(--category-fallback));
   /* Square top corners so the category chip flows like a file tab; only the
      bottom corners round. */
   border-radius: 0 0 var(--radius) var(--radius);
@@ -707,22 +734,6 @@ input.filter-input.searchbox {
   transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1),
     box-shadow 0.22s ease-out, border-color 0.22s ease-out;
   animation: card-enter 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.entry-card[data-category="trabajo"] {
-  border-top-color: var(--blue);
-}
-
-.entry-card[data-category="estudio"] {
-  border-top-color: var(--green);
-}
-
-.entry-card[data-category="entretenimiento"] {
-  border-top-color: #7a5220;
-}
-
-.entry-card[data-category="servicios"] {
-  border-top-color: #6a4a8f;
 }
 
 /* Hover: the card lifts like a file tab under the finger. */
@@ -958,6 +969,180 @@ input.filter-input.searchbox {
   width: 100%;
   min-width: 0;
   z-index: 30;
+}
+
+/* ------------------------------------------------------------------ */
+/* Category administration modal                                        */
+/* ------------------------------------------------------------------ */
+
+.category-admin-modal {
+  max-width: 34rem;
+}
+
+.category-count {
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.category-dot {
+  width: 0.8rem;
+  height: 0.8rem;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(28, 35, 51, 0.25);
+}
+
+.category-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+.category-edit-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.category-edit-head input {
+  flex: 1;
+  min-width: 0;
+}
+
+.category-list {
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.category-new-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin: 0.35rem 0 1.1rem;
+  padding: 0.7rem;
+  background: var(--paper);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+}
+
+.category-new-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.category-new-head input {
+  flex: 1;
+  min-width: 0;
+  margin-top: 0;
+}
+
+.category-new-title {
+  margin: 0 0 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--gold);
+}
+
+.category-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.5rem 0.55rem;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.category-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  margin-left: auto;
+}
+
+.category-row-main {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  width: 100%;
+}
+
+.category-row-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.modal input.category-name-input {
+  font-size: 0.9rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* Swatch grid + tooltip (category administration modal)                */
+/* ------------------------------------------------------------------ */
+
+.swatch {
+  width: 100%;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: var(--radius);
+  transition: transform 0.12s ease-out, border-color 0.18s ease-out;
+}
+
+.swatch:hover {
+  transform: scale(1.12);
+}
+
+.swatch.selected {
+  border-color: var(--ink);
+  box-shadow: inset 0 0 0 2px var(--paper-raised);
+}
+
+.swatch-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 0.4rem;
+}
+
+/* Ink tooltip for the disabled trash: explains why the category cannot be
+   deleted (in use, or last remaining). Hovering the wrapper works even
+   though the button inside is disabled. */
+.tooltip-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.tooltip-wrap:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 0.4rem);
+  z-index: 40;
+  width: max-content;
+  max-width: 14rem;
+  padding: 0.4rem 0.55rem;
+  background: var(--ink);
+  color: var(--paper-raised);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  pointer-events: none;
 }
 
 .modal input:focus,

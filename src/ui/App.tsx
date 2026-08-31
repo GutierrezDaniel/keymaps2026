@@ -9,11 +9,22 @@
 //   is how the Rust 5-minute auto-lock surfaces to the UI).
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Lock, Plus } from "lucide-react";
+import { Lock, Plus, Tags } from "lucide-react";
 import { api, toCommandError } from "./api";
-import type { EntrySummary, EntryDetails, EntryInput, Filters, CopyField, CommandError } from "./api";
+import type {
+  EntrySummary,
+  EntryDetails,
+  EntryInput,
+  Filters,
+  CopyField,
+  CommandError,
+  CategoryDto,
+  UpdateCategoryRequest,
+  UpdateCategoryResult,
+} from "./api";
 import {
   BackoffNotice,
+  CategoryAdminModal,
   DeleteConfirm,
   EntryCard,
   EntryModal,
@@ -60,6 +71,18 @@ function spanishMessage(error: CommandError): string {
       return "Contraseña incorrecta.";
     case "InvalidCategory":
       return "La categoría seleccionada no es válida.";
+    case "BlankCategoryName":
+      return "El nombre de la categoría no puede estar vacío.";
+    case "InvalidCategoryColor":
+      return "El color elegido no es válido.";
+    case "DuplicateCategory":
+      return "Ya existe una categoría con ese nombre.";
+    case "CategoryInUse":
+      return "La categoría está en uso y no se puede eliminar.";
+    case "LastCategory":
+      return "Debe quedar al menos una categoría.";
+    case "CategoryNotFound":
+      return "La categoría ya no existe.";
     case "NotFound":
       return "La entrada ya no existe.";
     case "InvalidField":
@@ -208,6 +231,15 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>("booting");
   const [entries, setEntries] = useState<EntrySummary[]>([]);
   const [emails, setEmails] = useState<string[]>([]);
+  /** Repository categories (deterministic alphabetical order from the
+   *  backend); drives the admin modal, entry-form selectors, filters and the
+   *  card color map. */
+  const [categories, setCategories] = useState<CategoryDto[]>([]);
+  /** Number of entries referencing each category, computed from a full
+   *  unfiltered entry snapshot — never from the filtered display list, which
+   *  an active filter can shrink to a subset. */
+  const [usage, setUsage] = useState<Record<string, number>>({});
+  const [adminOpen, setAdminOpen] = useState(false);
   const [filters, setFilters] = useState<Filters>({});
   const [details, setDetails] = useState<Record<string, EntryDetails>>({});
   const [leavingId, setLeavingId] = useState<string | null>(null);
@@ -233,6 +265,9 @@ export default function App() {
     setPhase("locked");
     setEntries([]);
     setEmails([]);
+    setCategories([]);
+    setUsage({});
+    setAdminOpen(false);
     setDetails({});
     setLeavingId(null);
     setEditing(null);
@@ -241,6 +276,35 @@ export default function App() {
     setMorphOriginId(null);
     setMorphActive(false);
     setNotice(null);
+  }
+
+  /** Refresh the category map and its per-category entry counts. Categories
+   *  and usage only change through the administration modal or entry saves,
+   *  so this runs after unlock, after entry saves/deletes and after every
+   *  category mutation — never on plain list refreshes. The usage snapshot
+   *  comes from the unfiltered entry list so counts stay exact under any
+   *  active filter. */
+  async function loadCategories(): Promise<void> {
+    try {
+      const [categoryList, allEntries] = await Promise.all([
+        api.listCategories(),
+        api.list(null),
+      ]);
+      setCategories(categoryList);
+      const next: Record<string, number> = {};
+      for (const category of categoryList) next[category.name] = 0;
+      for (const entry of allEntries) {
+        next[entry.category] = (next[entry.category] ?? 0) + 1;
+      }
+      setUsage(next);
+    } catch (raw) {
+      const commandError = toCommandError(raw);
+      if (commandError.kind === "Locked") {
+        lockScreen();
+      } else {
+        setError(spanishMessage(commandError));
+      }
+    }
   }
 
   /** Refresh the email selector options from the repository. The complete
@@ -289,6 +353,7 @@ export default function App() {
         setEntries(list);
         setPhase("unlocked");
         void loadEmails();
+        void loadCategories();
       })
       .catch((raw) => {
         if (cancelled) return;
@@ -330,6 +395,7 @@ export default function App() {
       setNotice(null);
       // Breaking the seal: the locked sheet folds away and the vault rises.
       withViewTransition(() => applyList(filtersRef.current), true);
+      void loadCategories();
     } catch (raw) {
       const commandError = toCommandError(raw);
       if (commandError.kind === "Backoff") {
@@ -365,9 +431,11 @@ export default function App() {
   }
 
   /** Open the unified entry modal for an existing entry, fetching the
-   *  decrypted details (password prefill) on the first open. The card that
-   *  was clicked becomes the morph origin for the details sheet. */
-  async function openEditEntry(entry: EntrySummary, origin: DOMRect | null) {
+   *  decrypted details (password prefill) on the first open. The sheet
+   *  always enters with its standard flip-in animation, matching the
+   *  new-entry modal; the card only participates in the reverse morph
+   *  when the modal closes back into it. */
+  async function openEditEntry(entry: EntrySummary) {
     setError(null);
     if (!details[entry.id]) {
       try {
@@ -383,29 +451,11 @@ export default function App() {
         return;
       }
     }
-    if (origin && supportsViewTransitions()) {
-      // The morph origin must be painted BEFORE the transition captures the
-      // "from" snapshot, so the browser sees the card in the old state and
-      // the modal in the new one — that shared identity is what it morphs.
-      // The origin id is cleared inside the commit: only the card may carry
-      // the shared view-transition name in "from" and only the modal in "to".
-      setMorphOriginId(entry.id);
-      requestAnimationFrame(() => {
-        withViewTransition(() => {
-          setMorphOriginId(null);
-          setMorphActive(true);
-          setEditing(entry);
-          editingRef.current = entry;
-          setFormOpen(true);
-        });
-      });
-    } else {
-      setMorphOriginId(null);
-      setMorphActive(false);
-      setEditing(entry);
-      editingRef.current = entry;
-      setFormOpen(true);
-    }
+    setMorphOriginId(null);
+    setMorphActive(false);
+    setEditing(entry);
+    editingRef.current = entry;
+    setFormOpen(true);
   }
 
   async function handleCopy(id: string, field: CopyField) {
@@ -444,6 +494,8 @@ export default function App() {
       setEditing(null);
       editingRef.current = null;
       await applyList(filtersRef.current);
+      // The entry may have changed categories, so the usage counts refresh.
+      void loadCategories();
     } catch (raw) {
       const commandError = toCommandError(raw);
       if (commandError.kind === "Locked") {
@@ -467,6 +519,7 @@ export default function App() {
       setLeavingId(null);
       closeDetailsModal();
       await applyList(filtersRef.current);
+      void loadCategories();
     } catch (raw) {
       setLeavingId(null);
       const commandError = toCommandError(raw);
@@ -505,6 +558,57 @@ export default function App() {
     }
   }
 
+  // -----------------------------------------------------------------------
+  // Category administration (category-administration spec). The modal owns
+  // validation and confirmation UX; these handlers translate its callbacks
+  // into commands and rethrow normalized errors so the modal can show them
+  // inline. "Locked" locks the screen and is never rethrown.
+  // -----------------------------------------------------------------------
+
+  async function handleCreateCategory(category: CategoryDto): Promise<void> {
+    try {
+      await api.createCategory(category);
+      await loadCategories();
+    } catch (raw) {
+      const commandError = toCommandError(raw);
+      if (commandError.kind === "Locked") {
+        lockScreen();
+        return;
+      }
+      throw commandError;
+    }
+  }
+
+  async function handleUpdateCategory(
+    request: UpdateCategoryRequest,
+  ): Promise<UpdateCategoryResult> {
+    try {
+      const result = await api.updateCategory(request);
+      if (result.status === "applied") await loadCategories();
+      return result;
+    } catch (raw) {
+      const commandError = toCommandError(raw);
+      if (commandError.kind === "Locked") {
+        lockScreen();
+      }
+      throw commandError;
+    }
+  }
+
+  async function handleDeleteCategory(name: string): Promise<void> {
+    try {
+      await api.deleteCategory(name);
+      await loadCategories();
+    } catch (raw) {
+      const commandError = toCommandError(raw);
+      if (commandError.kind === "Locked") {
+        lockScreen();
+        return;
+      }
+      throw commandError;
+    }
+  }
+
   if (phase === "booting") {
     return (
       <div className="app-shell">
@@ -540,6 +644,12 @@ export default function App() {
 
   const hasFilters = Boolean(filters.site || filters.category || filters.email);
 
+  /** Color for an entry's category chip from the repository map; undefined
+   *  for unknown categories, so the card renders the CSS fallback. */
+  function categoryColor(name: string): string | undefined {
+    return categories.find((category) => category.name === name)?.color;
+  }
+
   return (
     <div className="app-shell">
       <header className="vault-header">
@@ -548,6 +658,10 @@ export default function App() {
           <button type="button" className="primary-button" onClick={openNewEntry}>
             <Plus size={16} aria-hidden="true" />
             Nueva entrada
+          </button>
+          <button type="button" className="action-button" onClick={() => setAdminOpen(true)}>
+            <Tags size={15} aria-hidden="true" />
+            Administrar categorías
           </button>
           <button type="button" className="icon-button" aria-label="Bloquear" onClick={handleLock}>
             <Lock size={18} />
@@ -562,7 +676,12 @@ export default function App() {
       )}
       {notice && <p className="notice">{notice}</p>}
 
-      <SearchFilters filters={filters} emails={emails} onChange={handleFiltersChange} />
+      <SearchFilters
+        filters={filters}
+        categories={categories}
+        emails={emails}
+        onChange={handleFiltersChange}
+      />
 
       {entries.length === 0 ? (
         <p className="empty-state">
@@ -576,9 +695,10 @@ export default function App() {
             <EntryCard
               key={entry.id}
               entry={entry}
+              color={categoryColor(entry.category)}
               leaving={leavingId === entry.id}
               morphOrigin={morphOriginId === entry.id}
-              onOpen={(origin) => void openEditEntry(entry, origin)}
+              onOpen={() => void openEditEntry(entry)}
             />
           ))}
         </div>
@@ -588,6 +708,7 @@ export default function App() {
         key={editing?.id ?? "new"}
         open={formOpen}
         initial={editing}
+        categories={categories}
         initialPassword={editing ? (details[editing.id]?.password ?? "") : ""}
         morphing={morphActive}
         onSave={handleSave}
@@ -603,6 +724,16 @@ export default function App() {
           onCancel={() => setDeleting(null)}
         />
       )}
+
+      <CategoryAdminModal
+        open={adminOpen}
+        categories={categories}
+        usage={usage}
+        onCreate={handleCreateCategory}
+        onUpdate={handleUpdateCategory}
+        onDelete={handleDeleteCategory}
+        onClose={() => setAdminOpen(false)}
+      />
     </div>
   );
 }

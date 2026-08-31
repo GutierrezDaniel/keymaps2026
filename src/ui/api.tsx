@@ -15,9 +15,40 @@ import { invoke } from "@tauri-apps/api/core";
 // Domain types (design "Interfaces / Contracts").
 // ---------------------------------------------------------------------------
 
-const CATEGORIES = ["entretenimiento", "trabajo", "estudio", "servicios"] as const;
+/** Wire form of a category: a display name and one palette color —
+ *  `CategoryDto` in tauri.rs. */
+interface CategoryDto {
+  name: string;
+  color: string;
+}
 
-type Category = (typeof CATEGORIES)[number];
+/** The exact 24 predefined swatches (design "Interfaces / Contracts"),
+ *  mirrored from `CATEGORY_PALETTE` in entry.rs. The backend rejects colors
+ *  outside this set; the swatch grid only ever offers these. */
+const CATEGORY_PALETTE = [
+  "#7a5220", "#2f5d8c", "#2f6b3f", "#6a4a8f", "#ad3a2d", "#c05640", "#b76e2b", "#d4a72c",
+  "#86601f", "#5f7f35", "#4f8a6b", "#2f6b63", "#3b7d91", "#4a6fa5", "#6b5b95", "#8a4f7d",
+  "#a34f67", "#9a5b4a", "#7c5a3c", "#596275", "#36454f", "#708090", "#8f9e9d", "#a67c52",
+] as const;
+
+/** Input for `update_category`: the old name, the target name/color, and
+ *  whether the rename was confirmed — `UpdateCategoryRequest` in tauri.rs.
+ *  Recolors (old == new) apply directly; unconfirmed renames return a preview
+ *  and perform no write. */
+interface UpdateCategoryRequest {
+  old_name: string;
+  new_name: string;
+  color: string;
+  confirmed: boolean;
+}
+
+/** Result of an update: either applied, or a rename awaiting confirmation with
+ *  the number of entries the cascade would affect. Internally tagged enum in
+ *  Rust (`tag = "status"`, snake_case): `{ status: "applied" }` or
+ *  `{ status: "rename_preview", affected_entries }`. */
+type UpdateCategoryResult =
+  | { status: "applied" }
+  | { status: "rename_preview"; affected_entries: number };
 
 /** Metadata-only entry view (no secret material) — `EntrySummaryDto`. */
 interface EntrySummary {
@@ -73,6 +104,12 @@ type CommandErrorKind =
   | "VaultNotInitialized"
   | "AlreadyInitialized"
   | "InvalidCategory"
+  | "BlankCategoryName"
+  | "InvalidCategoryColor"
+  | "DuplicateCategory"
+  | "CategoryInUse"
+  | "LastCategory"
+  | "CategoryNotFound"
   | "NotFound"
   | "InvalidField"
   | "Crypto"
@@ -95,6 +132,12 @@ const UNIT_VARIANTS: Record<string, CommandErrorKind> = {
   VaultNotInitialized: "VaultNotInitialized",
   AlreadyInitialized: "AlreadyInitialized",
   InvalidCategory: "InvalidCategory",
+  BlankCategoryName: "BlankCategoryName",
+  InvalidCategoryColor: "InvalidCategoryColor",
+  DuplicateCategory: "DuplicateCategory",
+  CategoryInUse: "CategoryInUse",
+  LastCategory: "LastCategory",
+  CategoryNotFound: "CategoryNotFound",
   NotFound: "NotFound",
   InvalidField: "InvalidField",
 };
@@ -205,7 +248,42 @@ const api = {
   async recordActivity(): Promise<void> {
     await invoke("record_activity");
   },
+
+  /** List the repository categories in deterministic alphabetical order
+   *  (case-normalized name, exact-name tie-break) — `list_categories`. */
+  async listCategories(): Promise<CategoryDto[]> {
+    return invoke<CategoryDto[]>("list_categories");
+  },
+
+  /** Create a category with a non-blank name and a palette color —
+   *  `create_category`. */
+  async createCategory(category: CategoryDto): Promise<void> {
+    await invoke("create_category", { input: category });
+  },
+
+  /** Update a category. Recolor (old == new) applies directly; an unconfirmed
+   *  rename returns a preview with the affected entry count and writes
+   *  nothing — `update_category`. */
+  async updateCategory(request: UpdateCategoryRequest): Promise<UpdateCategoryResult> {
+    return invoke<UpdateCategoryResult>("update_category", { request });
+  },
+
+  /** Delete an unused category; the service refuses in-use and last
+   *  categories — `delete_category`. */
+  async deleteCategory(name: string): Promise<void> {
+    await invoke("delete_category", { name });
+  },
 };
 
-export { api, toCommandError, CATEGORIES };
-export type { Category, EntrySummary, EntryDetails, EntryInput, Filters, CopyField, CommandError };
+export { api, toCommandError, CATEGORY_PALETTE };
+export type {
+  CategoryDto,
+  UpdateCategoryRequest,
+  UpdateCategoryResult,
+  EntrySummary,
+  EntryDetails,
+  EntryInput,
+  Filters,
+  CopyField,
+  CommandError,
+};

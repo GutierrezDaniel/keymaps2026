@@ -21,14 +21,14 @@
 
 ### Phase 4: API and State Wiring
 
-- [ ] 4.1 Modify `src/ui/api.tsx` to expose category DTOs and all four commands; remove frontend category constants.
-- [ ] 4.2 Modify `src/ui/App.tsx` to load categories after unlock and thread the category map through administration, entry forms, filters, cards, header access, refreshes, and unknown-category defaults.
+- [x] 4.1 Modify `src/ui/api.tsx` to expose category DTOs and all four commands; remove frontend category constants.
+- [x] 4.2 Modify `src/ui/App.tsx` to load categories after unlock and thread the category map through administration, entry forms, filters, cards, header access, refreshes, and unknown-category defaults.
 
 ### Phase 5: Administration UI and Verification
 
-- [ ] 5.1 Modify `src/ui/components.tsx` for `CategoryAdminModal`: alphabetical list, create/rename/recolor, 24 swatches, instant recolor, rename/delete confirmation with entry count, disabled in-use trash tooltip, and last-category protection.
-- [ ] 5.2 Modify `src/ui/styles.css` for the themed modal, swatch grid, tooltip, and CSS-variable/inline card colors; keep selectors alphabetically ordered.
-- [ ] 5.3 Update `src/ui/api.test.tsx`, `components.test.tsx`, and `App.test.tsx` for API calls, modal validation/swatches/tooltips/count, unlock loading, dynamic selectors/filters, mapped colors, fallback, and header wiring.
+- [x] 5.1 Modify `src/ui/components.tsx` for `CategoryAdminModal`: alphabetical list, create/rename/recolor, 24 swatches, instant recolor, rename/delete confirmation with entry count, disabled in-use trash tooltip, and last-category protection.
+- [x] 5.2 Modify `src/ui/styles.css` for the themed modal, swatch grid, tooltip, and CSS-variable/inline card colors; keep selectors alphabetically ordered.
+- [x] 5.3 Update `src/ui/api.test.tsx`, `components.test.tsx`, and `App.test.tsx` for API calls, modal validation/swatches/tooltips/count, unlock loading, dynamic selectors/filters, mapped colors, fallback, and header wiring.
 
 The design threat matrix marks every row `N/A`; no threat-specific RED tasks are required. Strict TDD is disabled, so tests remain verification tasks after implementation. Complete Slice 1 and its tests before starting Slice 2. Product wording “delete with cascade” conflicts with the specs’ in-use refusal; resolve this before apply, while the task list follows the explicit safe-delete rules and confirmed rename cascade.
 
