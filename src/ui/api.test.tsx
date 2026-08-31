@@ -4,7 +4,7 @@
 // normalize into typed CommandError values.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { api, toCommandError } from "./api";
+import { api, toCommandError, CATEGORY_PALETTE } from "./api";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -117,6 +117,69 @@ describe("api — command wiring", () => {
     await api.recordActivity();
     expect(mockedInvoke).toHaveBeenCalledWith("record_activity");
   });
+
+  it("listCategories invokes list_categories with no arguments", async () => {
+    mockedInvoke.mockResolvedValue([
+      { name: "entretenimiento", color: "#7a5220" },
+      { name: "lectura", color: "#8a4f7d" },
+    ]);
+    const categories = await api.listCategories();
+    expect(categories).toEqual([
+      { name: "entretenimiento", color: "#7a5220" },
+      { name: "lectura", color: "#8a4f7d" },
+    ]);
+    expect(mockedInvoke).toHaveBeenCalledWith("list_categories");
+  });
+
+  it("createCategory invokes create_category with the CategoryDto as input", async () => {
+    mockedInvoke.mockResolvedValue(undefined);
+    await api.createCategory({ name: "lectura", color: "#8a4f7d" });
+    expect(mockedInvoke).toHaveBeenCalledWith("create_category", {
+      input: { name: "lectura", color: "#8a4f7d" },
+    });
+  });
+
+  it("updateCategory invokes update_category with the snake_case request DTO", async () => {
+    mockedInvoke.mockResolvedValue({ status: "rename_preview", affected_entries: 3 });
+    const result = await api.updateCategory({
+      old_name: "trabajo",
+      new_name: "laburo",
+      color: "#c05640",
+      confirmed: false,
+    });
+    expect(result).toEqual({ status: "rename_preview", affected_entries: 3 });
+    expect(mockedInvoke).toHaveBeenCalledWith("update_category", {
+      request: {
+        old_name: "trabajo",
+        new_name: "laburo",
+        color: "#c05640",
+        confirmed: false,
+      },
+    });
+  });
+
+  it("updateCategory resolves an applied recolor as the applied tagged result", async () => {
+    mockedInvoke.mockResolvedValue({ status: "applied" });
+    const result = await api.updateCategory({
+      old_name: "trabajo",
+      new_name: "trabajo",
+      color: "#ad3a2d",
+      confirmed: true,
+    });
+    expect(result).toEqual({ status: "applied" });
+  });
+
+  it("deleteCategory invokes delete_category by category name", async () => {
+    mockedInvoke.mockResolvedValue(undefined);
+    await api.deleteCategory("lectura");
+    expect(mockedInvoke).toHaveBeenCalledWith("delete_category", { name: "lectura" });
+  });
+
+  it("CATEGORY_PALETTE exposes exactly the 24 backend swatches", () => {
+    expect(CATEGORY_PALETTE).toHaveLength(24);
+    expect(CATEGORY_PALETTE).toContain("#7a5220");
+    expect(CATEGORY_PALETTE).toContain("#a67c52");
+  });
 });
 
 describe("toCommandError — rejection normalization", () => {
@@ -126,6 +189,12 @@ describe("toCommandError — rejection normalization", () => {
     expect(toCommandError("VaultNotInitialized")).toEqual({ kind: "VaultNotInitialized" });
     expect(toCommandError("AlreadyInitialized")).toEqual({ kind: "AlreadyInitialized" });
     expect(toCommandError("InvalidCategory")).toEqual({ kind: "InvalidCategory" });
+    expect(toCommandError("BlankCategoryName")).toEqual({ kind: "BlankCategoryName" });
+    expect(toCommandError("InvalidCategoryColor")).toEqual({ kind: "InvalidCategoryColor" });
+    expect(toCommandError("DuplicateCategory")).toEqual({ kind: "DuplicateCategory" });
+    expect(toCommandError("CategoryInUse")).toEqual({ kind: "CategoryInUse" });
+    expect(toCommandError("LastCategory")).toEqual({ kind: "LastCategory" });
+    expect(toCommandError("CategoryNotFound")).toEqual({ kind: "CategoryNotFound" });
     expect(toCommandError("NotFound")).toEqual({ kind: "NotFound" });
     expect(toCommandError("InvalidField")).toEqual({ kind: "InvalidField" });
   });
