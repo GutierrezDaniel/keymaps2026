@@ -13,9 +13,12 @@ use std::path::PathBuf;
 use secrecy::{ExposeSecret, SecretString};
 use tempfile::TempDir;
 
+use keymaps2026_lib::adapters::backup::BackupService;
 use keymaps2026_lib::adapters::crypto::argon2_aes::Argon2Aes;
 use keymaps2026_lib::adapters::persistence::sqlite::SqliteVaultRepository;
-use keymaps2026_lib::core::domain::entry::{EncryptedField, EntryRecord, Filters, RecordId};
+use keymaps2026_lib::core::domain::entry::{
+    Category, EncryptedField, EntryRecord, Filters, RecordId,
+};
 use keymaps2026_lib::core::ports::cipher::{CipherPort, CryptoError, VaultKey};
 use keymaps2026_lib::core::ports::key_derivation::KeyDerivationPort;
 use keymaps2026_lib::core::ports::vault_repository::{RepositoryError, VaultRepository};
@@ -410,4 +413,227 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> bool {
     haystack
         .windows(needle.len())
         .any(|window| window == needle)
+}
+
+// ---------------------------------------------------------------------------
+// Category migration (vault-storage "Category schema migration").
+// ---------------------------------------------------------------------------
+
+/// The `PRAGMA user_version` recorded in `path`'s database, read directly.
+fn user_version(path: &std::path::Path) -> i64 {
+    let conn = rusqlite::Connection::open(path).expect("raw open must succeed");
+    conn.query_row("PRAGMA user_version", [], |r| r.get(0))
+        .expect("user_version must be readable")
+}
+
+const SEEDED: [(&str, &str); 4] = [
+    ("entretenimiento", "#7a5220"),
+    ("trabajo", "#2f5d8c"),
+    ("estudio", "#2f6b3f"),
+    ("servicios", "#6a4a8f"),
+];
+
+/// Assert `repo` holds every seeded category with its exact migration color
+/// (as a subset: custom categories may coexist).
+fn assert_seeded(repo: &SqliteVaultRepository) {
+    let categories = repo.list_categories().unwrap();
+    for (name, color) in SEEDED {
+        let found = categories.iter().find(|c| c.name == name).unwrap();
+        assert_eq!(found.color, color, "seed {name} must keep its exact color");
+    }
+}
+
+#[test]
+fn fresh_vault_migrates_to_schema_v2_and_seeds_four_categories() {
+    let db = Db::new();
+    let repo = SqliteVaultRepository::open(&db.path).unwrap();
+    assert_eq!(user_version(&db.path), 2, "schema must be v2 after open");
+    assert_seeded(&repo);
+}
+
+#[test]
+fn migration_is_idempotent_and_preserves_custom_categories() {
+    let db = Db::new();
+    {
+        let repo = SqliteVaultRepository::open(&db.path).unwrap();
+        assert_seeded(&repo);
+        // A custom category must survive a migration rerun untouched.
+        repo.create_category(&Category::new("lectura", "#8a4f7d"))
+            .unwrap();
+        drop(repo);
+    }
+    // Reopening a v2 vault reruns initialization: no duplicate seeds, and the
+    // custom category keeps its exact color (vault-storage "Reopen a migrated
+    // vault").
+    let repo = SqliteVaultRepository::open(&db.path).unwrap();
+    assert_eq!(user_version(&db.path), 2);
+    let categories = repo.list_categories().unwrap();
+    assert_eq!(categories.len(), 5);
+    assert_seeded(&repo);
+    let lectura = categories.iter().find(|c| c.name == "lectura").unwrap();
+    assert_eq!(lectura.color, "#8a4f7d");
+}
+
+// ---------------------------------------------------------------------------
+// Category ordering (category-administration "Resolve ordering ties").
+// ---------------------------------------------------------------------------
+
+#[test]
+fn list_categories_orders_by_case_normalized_name_with_exact_tiebreak() {
+    let repo = SqliteVaultRepository::open_in_memory().unwrap();
+    // "Alfa" and "alfa" compare equally once case-normalized; the exact name
+    // is the deterministic secondary key (uppercase sorts first byte-wise).
+    // The four seeds are present too, so this proves interleaving as well.
+    repo.create_category(&Category::new("Beta", "#7a5220")).unwrap();
+    repo.create_category(&Category::new("alfa", "#2f5d8c")).unwrap();
+    repo.create_category(&Category::new("Alfa", "#2f6b3f")).unwrap();
+
+    let names: Vec<String> = repo
+        .list_categories()
+        .unwrap()
+        .into_iter()
+        .map(|c| c.name)
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "Alfa", "alfa", "Beta", "entretenimiento", "estudio", "servicios", "trabajo"
+        ]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Category CRUD, usage, rename cascade, and deletion
+// (vault-entries "Category reference integrity").
+// ---------------------------------------------------------------------------
+
+#[test]
+fn category_crud_recolor_and_usage_counts() {
+    let repo = SqliteVaultRepository::open_in_memory().unwrap();
+    let key = test_key();
+
+    repo.create_category(&Category::new("lectura", "#8a4f7d")).unwrap();
+    assert!(repo.category_exists("lectura").unwrap());
+    assert!(!repo.category_exists("inexistente").unwrap());
+    assert_eq!(repo.category_in_use("lectura").unwrap(), 0);
+
+    // One entry references the category; usage counts it.
+    let entry = record(&key, rid(1), "bookmarks", "a@b.c", "lectura", "pw");
+    repo.save(&entry).unwrap();
+    assert_eq!(repo.category_in_use("lectura").unwrap(), 1);
+
+    // Recolor (name unchanged): the cascade count reports the matched entries.
+    let affected = repo
+        .update_category("lectura", &Category::new("lectura", "#ad3a2d"))
+        .unwrap();
+    assert_eq!(affected, 1);
+    let categories = repo.list_categories().unwrap();
+    let lectura = categories.iter().find(|c| c.name == "lectura").unwrap();
+    assert_eq!(lectura.color, "#ad3a2d");
+
+    // Delete an unused category; deleting a missing one reports NotFound.
+    repo.delete_category("lectura").unwrap();
+    assert!(!repo.category_exists("lectura").unwrap());
+    assert_eq!(
+        repo.delete_category("lectura").unwrap_err(),
+        RepositoryError::NotFound
+    );
+}
+
+#[test]
+fn rename_cascades_to_all_referencing_entries_atomically() {
+    let repo = SqliteVaultRepository::open_in_memory().unwrap();
+    let key = test_key();
+    repo.create_category(&Category::new("lectura", "#8a4f7d")).unwrap();
+    for n in 1..=3 {
+        repo.save(&record(&key, rid(n), &format!("site{n}"), "a@b.c", "lectura", "pw"))
+            .unwrap();
+    }
+
+    let affected = repo
+        .update_category("lectura", &Category::new("libros", "#ad3a2d"))
+        .unwrap();
+    assert_eq!(affected, 3, "the cascade must touch all three entries");
+
+    let categories = repo.list_categories().unwrap();
+    assert!(!categories.iter().any(|c| c.name == "lectura"));
+    assert!(categories.iter().any(|c| c.name == "libros"));
+
+    let entries = repo.list(&Filters::new()).unwrap();
+    assert_eq!(entries.len(), 3);
+    assert!(entries.iter().all(|e| e.category == "libros"));
+}
+
+#[test]
+fn rename_collision_rolls_back_category_and_entries() {
+    let repo = SqliteVaultRepository::open_in_memory().unwrap();
+    let key = test_key();
+    repo.create_category(&Category::new("lectura", "#8a4f7d")).unwrap();
+    repo.save(&record(&key, rid(1), "github", "a@b.c", "lectura", "pw"))
+        .unwrap();
+
+    // Renaming `lectura` onto the seeded `trabajo` violates the primary key:
+    // the transaction must roll back the rename AND the entry cascade.
+    let err = repo
+        .update_category("lectura", &Category::new("trabajo", "#ad3a2d"))
+        .unwrap_err();
+    assert!(matches!(err, RepositoryError::Store(_)));
+
+    let categories = repo.list_categories().unwrap();
+    assert!(
+        categories.iter().any(|c| c.name == "lectura"),
+        "the original category must survive the rollback"
+    );
+    assert!(categories.iter().any(|c| c.name == "trabajo"));
+    let entries = repo.list(&Filters::new()).unwrap();
+    assert_eq!(entries[0].category, "lectura", "entry reference must roll back");
+}
+
+#[test]
+fn repo_delete_removes_row_and_leaves_entry_references_unchanged() {
+    // No foreign key by design: the storage layer removes the row, while the
+    // service refuses in-use deletions before this point. Entries keep their
+    // plaintext reference (documented no-FK behavior).
+    let repo = SqliteVaultRepository::open_in_memory().unwrap();
+    let key = test_key();
+    repo.create_category(&Category::new("lectura", "#8a4f7d")).unwrap();
+    repo.save(&record(&key, rid(1), "bookmarks", "a@b.c", "lectura", "pw"))
+        .unwrap();
+
+    repo.delete_category("lectura").unwrap();
+    assert!(!repo.category_exists("lectura").unwrap());
+    let entries = repo.list(&Filters::new()).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].category, "lectura");
+}
+
+// ---------------------------------------------------------------------------
+// Backup/restore category coverage (vault-storage "Backup and restore
+// category coverage").
+// ---------------------------------------------------------------------------
+
+#[test]
+fn backup_and_restore_preserve_seeded_and_custom_category_colors() {
+    let db = Db::new();
+    let repo = SqliteVaultRepository::open(&db.path).unwrap();
+    // A custom category plus an entry referencing it, on top of the seeds.
+    repo.create_category(&Category::new("lectura", "#8a4f7d")).unwrap();
+    let key = test_key();
+    repo.save(&record(&key, rid(1), "bookmarks", "a@b.c", "lectura", "pw"))
+        .unwrap();
+
+    let dest = db.path.with_extension("backup.db");
+    let backup = BackupService::new(std::sync::Arc::new(std::sync::Mutex::new(repo)));
+    backup.export(true, &dest).unwrap();
+
+    // Restore: the backup is a real vault; seeds keep exact colors, the custom
+    // category and its references come back together.
+    let reopened = SqliteVaultRepository::open(&dest).unwrap();
+    assert_seeded(&reopened);
+    let categories = reopened.list_categories().unwrap();
+    let lectura = categories.iter().find(|c| c.name == "lectura").unwrap();
+    assert_eq!(lectura.color, "#8a4f7d");
+    let entries = reopened.list(&Filters::new()).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].category, "lectura");
 }

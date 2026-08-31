@@ -59,13 +59,60 @@ impl std::fmt::Display for RecordIdParseError {
 
 impl std::error::Error for RecordIdParseError {}
 
-/// The initial set of valid categories. The model intentionally allows future
-/// custom categories without a schema-breaking change (see vault-entries).
-pub const INITIAL_CATEGORIES: [&str; 4] = ["entretenimiento", "trabajo", "estudio", "servicios"];
+/// A user-managed category: a display name plus one predefined color swatch.
+///
+/// Categories are repository-backed (see vault-entries): entry validation asks
+/// the repository whether the name exists, so custom persisted values are
+/// accepted without any fixed allow-list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Category {
+    pub name: String,
+    pub color: String,
+}
 
-/// Returns true when `category` is one of the currently valid initial categories.
-pub fn is_valid_category(category: &str) -> bool {
-    INITIAL_CATEGORIES.contains(&category)
+impl Category {
+    pub fn new(name: impl Into<String>, color: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            color: color.into(),
+        }
+    }
+}
+
+/// The exact predefined color swatches offered for categories (design
+/// "Interfaces / Contracts"). Colors outside this set are rejected.
+pub const CATEGORY_PALETTE: [&str; 24] = [
+    "#7a5220", "#2f5d8c", "#2f6b3f", "#6a4a8f", "#ad3a2d", "#c05640", "#b76e2b", "#d4a72c",
+    "#86601f", "#5f7f35", "#4f8a6b", "#2f6b63", "#3b7d91", "#4a6fa5", "#6b5b95", "#8a4f7d",
+    "#a34f67", "#9a5b4a", "#7c5a3c", "#596275", "#36454f", "#708090", "#8f9e9d", "#a67c52",
+];
+
+/// The four seeded categories with their migration colors (vault-storage
+/// "Category schema migration"): `entretenimiento` `#7a5220`, `trabajo`
+/// `#2f5d8c`, `estudio` `#2f6b3f`, and `servicios` `#6a4a8f`. The SQLite
+/// migration inserts them with `ON CONFLICT(name) DO NOTHING`.
+pub fn seed_categories() -> [Category; 4] {
+    [
+        Category::new("entretenimiento", "#7a5220"),
+        Category::new("trabajo", "#2f5d8c"),
+        Category::new("estudio", "#2f6b3f"),
+        Category::new("servicios", "#6a4a8f"),
+    ]
+}
+
+/// Returns true when `name` is non-empty after trimming whitespace.
+pub fn is_valid_category_name(name: &str) -> bool {
+    !name.trim().is_empty()
+}
+
+/// Returns true when `color` is exactly one of the predefined palette swatches.
+pub fn is_valid_category_color(color: &str) -> bool {
+    CATEGORY_PALETTE.contains(&color)
+}
+
+/// Returns true when `category` has a non-blank name and a palette color.
+pub fn is_valid_category(category: &Category) -> bool {
+    is_valid_category_name(&category.name) && is_valid_category_color(&category.color)
 }
 
 /// Authenticated encrypted representation of a secret field.

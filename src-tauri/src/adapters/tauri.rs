@@ -29,9 +29,9 @@ use crate::adapters::backup::{BackupError, BackupService};
 use crate::adapters::clipboard::{Clipboard, CLIPBOARD_EXPIRY};
 use crate::adapters::crypto::argon2_aes::Argon2Aes;
 use crate::adapters::persistence::sqlite::SqliteVaultRepository;
-use crate::core::application::vault_service::{ServiceError, VaultService};
+use crate::core::application::vault_service::{ServiceError, UpdateCategoryResult, VaultService};
 use crate::core::domain::entry::{
-    EntryDetails, EntryInput, EntryRecord, EntrySummary, Filters, RecordId,
+    Category, EntryDetails, EntryInput, EntryRecord, EntrySummary, Filters, RecordId,
 };
 use crate::core::ports::cipher::{CipherPort, CryptoError, VaultKey};
 use crate::core::ports::clipboard::{ClipboardError, ClipboardPort};
@@ -171,6 +171,18 @@ pub enum CommandError {
     VaultNotInitialized,
     #[error("vault is already initialized")]
     AlreadyInitialized,
+    #[error("category name must not be blank")]
+    BlankCategoryName,
+    #[error("category color must be one of the predefined swatches")]
+    InvalidCategoryColor,
+    #[error("a category with that exact name already exists")]
+    DuplicateCategory,
+    #[error("category is in use by entries and cannot be deleted")]
+    CategoryInUse,
+    #[error("the last category cannot be deleted")]
+    LastCategory,
+    #[error("category not found")]
+    CategoryNotFound,
     #[error("invalid category")]
     InvalidCategory,
     #[error("entry not found")]
@@ -207,7 +219,15 @@ impl From<ServiceError> for CommandError {
         match e {
             ServiceError::Crypto(c) => CommandError::Crypto(c.to_string()),
             ServiceError::Repository(r) => CommandError::from(r),
-            ServiceError::InvalidCategory => CommandError::InvalidCategory,
+            // Wire-stable entry error: the frontend already maps this kind
+            // (App.tsx "La categoría seleccionada no es válida").
+            ServiceError::UnknownCategory => CommandError::InvalidCategory,
+            ServiceError::BlankCategoryName => CommandError::BlankCategoryName,
+            ServiceError::InvalidCategoryColor => CommandError::InvalidCategoryColor,
+            ServiceError::DuplicateCategory => CommandError::DuplicateCategory,
+            ServiceError::CategoryInUse => CommandError::CategoryInUse,
+            ServiceError::LastCategory => CommandError::LastCategory,
+            ServiceError::CategoryNotFound => CommandError::CategoryNotFound,
             ServiceError::NotFound => CommandError::NotFound,
         }
     }
@@ -346,6 +366,59 @@ impl From<FilterDto> for Filters {
     }
 }
 
+/// Wire form of a category: a display name and one palette color.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CategoryDto {
+    pub name: String,
+    pub color: String,
+}
+
+/// Input for `update_category`: the old name, the target name/color, and
+/// whether the rename was confirmed. Recolors (old == new) apply directly;
+/// unconfirmed renames return a preview and perform no write.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UpdateCategoryRequest {
+    pub old_name: String,
+    pub new_name: String,
+    pub color: String,
+    pub confirmed: bool,
+}
+
+/// Result of an update: either applied, or a rename awaiting confirmation with
+/// the number of entries the cascade would affect.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case", tag = "status")]
+pub enum UpdateCategoryResultDto {
+    Applied,
+    RenamePreview { affected_entries: usize },
+}
+
+impl From<Category> for CategoryDto {
+    fn from(c: Category) -> Self {
+        Self {
+            name: c.name,
+            color: c.color,
+        }
+    }
+}
+
+impl From<CategoryDto> for Category {
+    fn from(dto: CategoryDto) -> Self {
+        Category::new(dto.name, dto.color)
+    }
+}
+
+impl From<UpdateCategoryResult> for UpdateCategoryResultDto {
+    fn from(result: UpdateCategoryResult) -> Self {
+        match result {
+            UpdateCategoryResult::Applied => UpdateCategoryResultDto::Applied,
+            UpdateCategoryResult::RenamePreview { affected_entries } => {
+                UpdateCategoryResultDto::RenamePreview { affected_entries }
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Application state: one instance managed by the Tauri shell.
 // ---------------------------------------------------------------------------
@@ -367,6 +440,30 @@ impl VaultRepository for Arc<Mutex<SqliteVaultRepository>> {
 
     fn delete(&self, id: &RecordId) -> Result<(), RepositoryError> {
         self.lock().unwrap().delete(id)
+    }
+
+    fn list_categories(&self) -> Result<Vec<Category>, RepositoryError> {
+        self.lock().unwrap().list_categories()
+    }
+
+    fn category_exists(&self, name: &str) -> Result<bool, RepositoryError> {
+        self.lock().unwrap().category_exists(name)
+    }
+
+    fn create_category(&self, category: &Category) -> Result<(), RepositoryError> {
+        self.lock().unwrap().create_category(category)
+    }
+
+    fn update_category(&self, old: &str, category: &Category) -> Result<usize, RepositoryError> {
+        self.lock().unwrap().update_category(old, category)
+    }
+
+    fn delete_category(&self, name: &str) -> Result<(), RepositoryError> {
+        self.lock().unwrap().delete_category(name)
+    }
+
+    fn category_in_use(&self, name: &str) -> Result<usize, RepositoryError> {
+        self.lock().unwrap().category_in_use(name)
     }
 }
 
@@ -532,6 +629,44 @@ impl VaultApp {
         Ok(self.service.delete_entry(id)?)
     }
 
+    // -- category administration ---------------------------------------------
+
+    /// List categories in deterministic case-normalized order. Unlocked-gated.
+    pub fn list_categories(&self) -> Result<Vec<Category>, CommandError> {
+        self.require_unlocked()?;
+        Ok(self.service.list_categories()?)
+    }
+
+    /// Create a category (name + palette color). Unlocked-gated; validation
+    /// errors (blank, non-palette color, exact duplicate) are surfaced as
+    /// `CommandError` variants without any write.
+    pub fn create_category(&self, category: &Category) -> Result<(), CommandError> {
+        self.require_unlocked()?;
+        Ok(self.service.create_category(category)?)
+    }
+
+    /// Update a category: recolor directly, or rename after confirmation.
+    /// Unconfirmed renames return a preview and write nothing. Unlocked-gated.
+    pub fn update_category(
+        &self,
+        request: &UpdateCategoryRequest,
+    ) -> Result<UpdateCategoryResult, CommandError> {
+        self.require_unlocked()?;
+        Ok(self.service.update_category(
+            &request.old_name,
+            &request.new_name,
+            &request.color,
+            request.confirmed,
+        )?)
+    }
+
+    /// Delete an unused category (never the last one). Unlocked-gated; the
+    /// service refuses in-use deletions.
+    pub fn delete_category(&self, name: &str) -> Result<(), CommandError> {
+        self.require_unlocked()?;
+        Ok(self.service.delete_category(name)?)
+    }
+
     // -- backup / clipboard --------------------------------------------------
 
     /// Export the vault to `dest` in its native encrypted format. Refused when
@@ -632,7 +767,11 @@ pub fn build(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
             delete,
             export,
             copy_field,
-            record_activity
+            record_activity,
+            list_categories,
+            create_category,
+            update_category,
+            delete_category
         ])
 }
 
@@ -747,13 +886,44 @@ fn record_activity(state: tauri::State<'_, VaultApp>) -> Result<(), CommandError
     Ok(())
 }
 
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn list_categories(state: tauri::State<'_, VaultApp>) -> Result<Vec<CategoryDto>, CommandError> {
+    let categories = state.list_categories()?;
+    Ok(categories.into_iter().map(CategoryDto::from).collect())
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn create_category(
+    state: tauri::State<'_, VaultApp>,
+    input: CategoryDto,
+) -> Result<(), CommandError> {
+    state.create_category(&input.into())
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn update_category(
+    state: tauri::State<'_, VaultApp>,
+    request: UpdateCategoryRequest,
+) -> Result<UpdateCategoryResultDto, CommandError> {
+    Ok(state.update_category(&request)?.into())
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn delete_category(state: tauri::State<'_, VaultApp>, name: String) -> Result<(), CommandError> {
+    state.delete_category(&name)
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
 
     use super::*;
     use crate::adapters::clipboard::tests::FakeClipboard;
-    use crate::core::domain::entry::{Filters, INITIAL_CATEGORIES};
+    use crate::core::domain::entry::Filters;
     use tempfile::TempDir;
 
     const MASTER_PASSWORD: &str = "correct horse battery staple";
@@ -800,7 +970,8 @@ mod tests {
             secret(password),
             "a@b.c",
             "user",
-            INITIAL_CATEGORIES[0],
+            // A seeded category: valid through the repository-backed check.
+            "entretenimiento",
         )
     }
 
@@ -1070,7 +1241,7 @@ mod tests {
             secret("b"),
             "team@example.com",
             "user",
-            INITIAL_CATEGORIES[0],
+            "entretenimiento",
         );
         app.create_entry(&team).unwrap();
 
@@ -1136,5 +1307,191 @@ mod tests {
 
         let reopened = SqliteVaultRepository::open(&dest).unwrap();
         assert!(reopened.is_initialized().unwrap());
+    }
+
+    // -----------------------------------------------------------------------
+    // Category administration commands (category-administration spec).
+    // -----------------------------------------------------------------------
+
+    fn entry_input_for(site: &str, password: &str, category: &str) -> EntryInput {
+        EntryInput::new(
+            site,
+            format!("https://{site}"),
+            secret(password),
+            "a@b.c",
+            "user",
+            category,
+        )
+    }
+
+    fn update_request(old_name: &str, new_name: &str, color: &str, confirmed: bool) -> UpdateCategoryRequest {
+        UpdateCategoryRequest {
+            old_name: old_name.to_string(),
+            new_name: new_name.to_string(),
+            color: color.to_string(),
+            confirmed,
+        }
+    }
+
+    #[test]
+    fn category_commands_are_gated_by_unlocked_session() {
+        let app = app();
+        assert_eq!(app.list_categories().unwrap_err(), CommandError::Locked);
+        assert_eq!(
+            app.create_category(&Category::new("lectura", "#8a4f7d"))
+                .unwrap_err(),
+            CommandError::Locked
+        );
+        assert_eq!(
+            app.update_category(&update_request("trabajo", "trabajo", "#ad3a2d", false))
+                .unwrap_err(),
+            CommandError::Locked
+        );
+        assert_eq!(app.delete_category("trabajo").unwrap_err(), CommandError::Locked);
+    }
+
+    #[test]
+    fn category_crud_and_validation_through_commands() {
+        let app = unlocked_app();
+
+        // The four seeds are listed in deterministic order.
+        let names: Vec<String> = app
+            .list_categories()
+            .unwrap()
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        assert_eq!(names, ["entretenimiento", "estudio", "servicios", "trabajo"]);
+
+        // Create a custom category and see it listed.
+        app.create_category(&Category::new("lectura", "#8a4f7d")).unwrap();
+        assert!(app
+            .list_categories()
+            .unwrap()
+            .iter()
+            .any(|c| c.name == "lectura"));
+
+        // Validation errors map to distinct kinds without writing.
+        assert_eq!(
+            app.create_category(&Category::new("lectura", "#8a4f7d"))
+                .unwrap_err(),
+            CommandError::DuplicateCategory
+        );
+        assert_eq!(
+            app.create_category(&Category::new("   ", "#8a4f7d"))
+                .unwrap_err(),
+            CommandError::BlankCategoryName
+        );
+        assert_eq!(
+            app.create_category(&Category::new("nueva", "#ff0000"))
+                .unwrap_err(),
+            CommandError::InvalidCategoryColor
+        );
+    }
+
+    #[test]
+    fn recolor_applies_directly_and_rename_preview_requires_confirmation() {
+        let app = unlocked_app();
+        let id = app
+            .create_entry(&entry_input_for("github", "s3cr3t", "trabajo"))
+            .unwrap();
+
+        // Recolor (same name) applies without confirmation.
+        let result = app
+            .update_category(&update_request("trabajo", "trabajo", "#ad3a2d", false))
+            .unwrap();
+        assert_eq!(result, UpdateCategoryResult::Applied);
+        let trabajo = app
+            .list_categories()
+            .unwrap()
+            .into_iter()
+            .find(|c| c.name == "trabajo")
+            .unwrap();
+        assert_eq!(trabajo.color, "#ad3a2d");
+
+        // Unconfirmed rename: preview count, no write anywhere.
+        let result = app
+            .update_category(&update_request("trabajo", "laburo", "#c05640", false))
+            .unwrap();
+        assert_eq!(
+            result,
+            UpdateCategoryResult::RenamePreview { affected_entries: 1 }
+        );
+        assert!(app
+            .list_categories()
+            .unwrap()
+            .iter()
+            .any(|c| c.name == "trabajo"));
+        assert!(!app
+            .list_categories()
+            .unwrap()
+            .iter()
+            .any(|c| c.name == "laburo"));
+        assert_eq!(app.get_entry_details(&id).unwrap().summary.category, "trabajo");
+
+        // Confirmed rename cascades to the entry.
+        let result = app
+            .update_category(&update_request("trabajo", "laburo", "#c05640", true))
+            .unwrap();
+        assert_eq!(result, UpdateCategoryResult::Applied);
+        assert_eq!(app.get_entry_details(&id).unwrap().summary.category, "laburo");
+    }
+
+    #[test]
+    fn delete_category_refuses_in_use_and_last_category_through_commands() {
+        // In-use category: refused.
+        let app = unlocked_app();
+        app.create_entry(&entry_input_for("github", "p", "trabajo"))
+            .unwrap();
+        assert_eq!(app.delete_category("trabajo").unwrap_err(), CommandError::CategoryInUse);
+        assert_eq!(
+            app.delete_category("ghost").unwrap_err(),
+            CommandError::CategoryNotFound
+        );
+
+        // Last remaining category: protected even when unused.
+        let app = unlocked_app();
+        app.delete_category("entretenimiento").unwrap();
+        app.delete_category("estudio").unwrap();
+        app.delete_category("servicios").unwrap();
+        assert_eq!(app.delete_category("trabajo").unwrap_err(), CommandError::LastCategory);
+    }
+
+    #[test]
+    fn entry_category_validation_accepts_custom_and_rejects_unknown() {
+        let app = unlocked_app();
+        // An entry referencing a persisted custom category succeeds.
+        app.create_category(&Category::new("lectura", "#8a4f7d")).unwrap();
+        let id = app
+            .create_entry(&entry_input_for("bookmarks", "p", "lectura"))
+            .unwrap();
+        assert_eq!(app.get_entry_details(&id).unwrap().summary.category, "lectura");
+
+        // An entry referencing an absent category is rejected (wire-stable
+        // InvalidCategory kind for the existing frontend mapping).
+        assert_eq!(
+            app.create_entry(&entry_input_for("ghost", "p", "no-existe"))
+                .unwrap_err(),
+            CommandError::InvalidCategory
+        );
+    }
+
+    #[test]
+    fn update_result_dto_serializes_as_tagged_enum() {
+        // The wire shape the frontend switches on (design "Interfaces").
+        let preview = serde_json::to_value(UpdateCategoryResultDto::from(
+            UpdateCategoryResult::RenamePreview { affected_entries: 3 },
+        ))
+        .unwrap();
+        assert_eq!(
+            preview,
+            serde_json::json!({ "status": "rename_preview", "affected_entries": 3 })
+        );
+
+        let applied = serde_json::to_value(UpdateCategoryResultDto::from(
+            UpdateCategoryResult::Applied,
+        ))
+        .unwrap();
+        assert_eq!(applied, serde_json::json!({ "status": "applied" }));
     }
 }
