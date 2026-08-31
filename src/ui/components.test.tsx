@@ -81,16 +81,6 @@ describe("EntryCard — summary card and category color chip", () => {
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 
-  it("passes the card's bounding rect as the modal morph origin", () => {
-    const onOpen = vi.fn();
-    renderCard({ onOpen });
-    fireEvent.click(screen.getByRole("button", { name: "Ver detalles de GitHub" }));
-    const origin = onOpen.mock.calls[0][0] as DOMRect | null;
-    expect(origin).not.toBeNull();
-    expect(origin).toHaveProperty("width");
-    expect(origin).toHaveProperty("height");
-  });
-
   it("marks the card as the morph origin when requested", () => {
     renderCard({ morphOrigin: true });
     const card = screen.getByTestId("entry-card");

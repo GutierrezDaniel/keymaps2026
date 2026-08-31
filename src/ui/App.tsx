@@ -431,9 +431,11 @@ export default function App() {
   }
 
   /** Open the unified entry modal for an existing entry, fetching the
-   *  decrypted details (password prefill) on the first open. The card that
-   *  was clicked becomes the morph origin for the details sheet. */
-  async function openEditEntry(entry: EntrySummary, origin: DOMRect | null) {
+   *  decrypted details (password prefill) on the first open. The sheet
+   *  always enters with its standard flip-in animation, matching the
+   *  new-entry modal; the card only participates in the reverse morph
+   *  when the modal closes back into it. */
+  async function openEditEntry(entry: EntrySummary) {
     setError(null);
     if (!details[entry.id]) {
       try {
@@ -449,29 +451,11 @@ export default function App() {
         return;
       }
     }
-    if (origin && supportsViewTransitions()) {
-      // The morph origin must be painted BEFORE the transition captures the
-      // "from" snapshot, so the browser sees the card in the old state and
-      // the modal in the new one — that shared identity is what it morphs.
-      // The origin id is cleared inside the commit: only the card may carry
-      // the shared view-transition name in "from" and only the modal in "to".
-      setMorphOriginId(entry.id);
-      requestAnimationFrame(() => {
-        withViewTransition(() => {
-          setMorphOriginId(null);
-          setMorphActive(true);
-          setEditing(entry);
-          editingRef.current = entry;
-          setFormOpen(true);
-        });
-      });
-    } else {
-      setMorphOriginId(null);
-      setMorphActive(false);
-      setEditing(entry);
-      editingRef.current = entry;
-      setFormOpen(true);
-    }
+    setMorphOriginId(null);
+    setMorphActive(false);
+    setEditing(entry);
+    editingRef.current = entry;
+    setFormOpen(true);
   }
 
   async function handleCopy(id: string, field: CopyField) {
@@ -714,7 +698,7 @@ export default function App() {
               color={categoryColor(entry.category)}
               leaving={leavingId === entry.id}
               morphOrigin={morphOriginId === entry.id}
-              onOpen={(origin) => void openEditEntry(entry, origin)}
+              onOpen={() => void openEditEntry(entry)}
             />
           ))}
         </div>

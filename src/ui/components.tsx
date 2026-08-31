@@ -121,9 +121,8 @@ export interface EntryCardProps {
   /** True while this card is the origin of a card→modal morph (it shares the
    *  modal's view-transition name only while the morph is in flight). */
   morphOrigin?: boolean;
-  /** Called when the card is activated; receives the card's bounding rect so
-   *  the caller can morph the details modal from this exact card. */
-  onOpen: (origin: DOMRect | null) => void;
+  /** Called when the card is activated (opens the details modal). */
+  onOpen: () => void;
 }
 
 /** A card whose front shows only the site name; the category is carried by a
@@ -147,10 +146,7 @@ export function EntryCard({
         type="button"
         className="card-open"
         aria-label={`Ver detalles de ${entry.site}`}
-        onClick={(event) => {
-          const card = event.currentTarget.closest(".entry-card");
-          onOpen(card ? card.getBoundingClientRect() : null);
-        }}
+        onClick={() => onOpen()}
       >
         <span className="card-site">{entry.site}</span>
       </button>
