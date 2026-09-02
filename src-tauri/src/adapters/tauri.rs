@@ -869,7 +869,7 @@ fn unlock(state: tauri::State<'_, Arc<VaultApp>>, req: UnlockRequest) -> Result<
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn lock(state: tauri::State<'_, VaultApp>) -> Result<(), CommandError> {
+fn lock(state: tauri::State<'_, Arc<VaultApp>>) -> Result<(), CommandError> {
     state.lock();
     Ok(())
 }
@@ -887,7 +887,7 @@ fn list(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn list_emails(state: tauri::State<'_, VaultApp>) -> Result<Vec<String>, CommandError> {
+fn list_emails(state: tauri::State<'_, Arc<VaultApp>>) -> Result<Vec<String>, CommandError> {
     state.list_emails()
 }
 
@@ -980,14 +980,14 @@ fn copy_field(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn record_activity(state: tauri::State<'_, VaultApp>) -> Result<(), CommandError> {
+fn record_activity(state: tauri::State<'_, Arc<VaultApp>>) -> Result<(), CommandError> {
     state.record_activity();
     Ok(())
 }
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn list_categories(state: tauri::State<'_, VaultApp>) -> Result<Vec<CategoryDto>, CommandError> {
+fn list_categories(state: tauri::State<'_, Arc<VaultApp>>) -> Result<Vec<CategoryDto>, CommandError> {
     let categories = state.list_categories()?;
     Ok(categories.into_iter().map(CategoryDto::from).collect())
 }
