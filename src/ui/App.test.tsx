@@ -5,15 +5,25 @@
 //
 // The Tauri IPC module is mocked so everything runs headless in jsdom; the
 // typed client (`./api`) routes through the same mocked invoke.
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, within, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
+import { save, open } from "@tauri-apps/plugin-dialog";
 import App from "./App";
 import type { EntrySummary, EntryDetails, CategoryDto } from "./api";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ save: vi.fn(), open: vi.fn() }));
 
 const mockedInvoke = vi.mocked(invoke);
+const mockedSave = vi.mocked(save);
+const mockedOpen = vi.mocked(open);
+
+beforeEach(() => {
+  mockedInvoke.mockReset();
+  mockedSave.mockReset();
+  mockedOpen.mockReset();
+});
 
 const ENTRY: EntrySummary = {
   id: "id-1",
@@ -349,6 +359,211 @@ describe("App — category administration", () => {
     expect(wrapper.getAttribute("data-tooltip")).toBe(
       "1 entrada sigue usando esta categoría.",
     );
+  });
+});
+
+describe("App — vault backup actions (vault-backup / vault-import)", () => {
+  it("hides export and import while locked", async () => {
+    await reachLogin();
+    expect(screen.queryByRole("button", { name: "Exportar respaldo" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Importar respaldo" })).toBeNull();
+  });
+
+  it("shows export and import only in the unlocked vault header", async () => {
+    bootUnlocked();
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+    expect(screen.getByRole("button", { name: "Exportar respaldo" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Importar respaldo" })).toBeTruthy();
+  });
+
+  it("exports through the save dialog and shows a Spanish success notice", async () => {
+    mockedSave.mockResolvedValue("/tmp/clavemaestra-backup.db");
+    mockRoutes({
+      list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
+      export_vault: () => undefined,
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Exportar respaldo" }));
+
+    await waitFor(() =>
+      expect(mockedInvoke).toHaveBeenCalledWith("export_vault", {
+        dest: "/tmp/clavemaestra-backup.db",
+      }),
+    );
+    expect(await screen.findByText("Respaldo exportado correctamente.")).toBeTruthy();
+  });
+
+  it("does nothing when the export save dialog is cancelled", async () => {
+    mockedSave.mockResolvedValue(null);
+    mockRoutes({
+      list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Exportar respaldo" }));
+
+    await waitFor(() =>
+      expect(mockedInvoke).not.toHaveBeenCalledWith("export_vault", expect.anything()),
+    );
+    expect(screen.queryByText("Respaldo exportado correctamente.")).toBeNull();
+  });
+
+  it("reports an export failure with a Spanish error notice", async () => {
+    mockedSave.mockResolvedValue("/tmp/backup.db");
+    mockRoutes({
+      list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
+      export_vault: () => {
+        throw { Backup: "disk full" };
+      },
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Exportar respaldo" }));
+
+    expect(await screen.findByText(/Ocurrió un error: disk full/)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Mi bóveda" })).toBeTruthy();
+  });
+
+  it("does nothing when the import open dialog is cancelled", async () => {
+    mockedOpen.mockResolvedValue(null);
+    mockRoutes({
+      list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Importar respaldo" }));
+
+    await waitFor(() =>
+      expect(mockedInvoke).not.toHaveBeenCalledWith("import_vault", expect.anything()),
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("previews a selected backup and shows the Spanish replacement modal", async () => {
+    mockedOpen.mockResolvedValue("/home/user/backup.db");
+    mockRoutes({
+      list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
+      import_vault: () => ({ status: "confirmation_required" }),
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Importar respaldo" }));
+
+    await waitFor(() =>
+      expect(mockedInvoke).toHaveBeenCalledWith("import_vault", {
+        path: "/home/user/backup.db",
+        confirmed: false,
+      }),
+    );
+    const dialog = screen.getByRole("alertdialog", { name: "Confirmar importación" });
+    expect(within(dialog).getByText(/Se reemplazará la bóveda actual/)).toBeTruthy();
+    expect(within(dialog).getByText("Esta acción no se puede deshacer.")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Importar" })).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Cancelar" })).toBeTruthy();
+    // The vault stays available behind the confirmation.
+    expect(screen.getByRole("heading", { name: "Mi bóveda" })).toBeTruthy();
+  });
+
+  it("cancelling the replacement modal leaves the vault unchanged", async () => {
+    mockedOpen.mockResolvedValue("/home/user/backup.db");
+    mockRoutes({
+      list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
+      import_vault: () => ({ status: "confirmation_required" }),
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Importar respaldo" }));
+    await screen.findByRole("alertdialog", { name: "Confirmar importación" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    // Only the preview was requested; nothing was confirmed or replaced.
+    expect(mockedInvoke).not.toHaveBeenCalledWith("import_vault", {
+      path: "/home/user/backup.db",
+      confirmed: true,
+    });
+    expect(screen.getByRole("heading", { name: "Mi bóveda" })).toBeTruthy();
+  });
+
+  it("confirms the import, relocks and returns to login with a Spanish notice", async () => {
+    mockedOpen.mockResolvedValue("/home/user/backup.db");
+    mockRoutes({
+      list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
+      import_vault: (args) =>
+        (args as { confirmed?: boolean }).confirmed
+          ? { status: "applied" }
+          : { status: "confirmation_required" },
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Importar respaldo" }));
+    await screen.findByRole("alertdialog", { name: "Confirmar importación" });
+    fireEvent.click(screen.getByRole("button", { name: "Importar" }));
+
+    await waitFor(() =>
+      expect(mockedInvoke).toHaveBeenCalledWith("import_vault", {
+        path: "/home/user/backup.db",
+        confirmed: true,
+      }),
+    );
+    expect(await screen.findByLabelText("Contraseña maestra")).toBeTruthy();
+    expect(screen.queryByText("GitHub")).toBeNull();
+    expect(
+      screen.getByText(/Inicia sesión con la contraseña maestra del respaldo importado/),
+    ).toBeTruthy();
+  });
+
+  it("reports an invalid import selection with a Spanish error", async () => {
+    mockedOpen.mockResolvedValue("/home/user/not-a-vault.db");
+    mockRoutes({
+      list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
+      import_vault: () => {
+        throw "Import";
+      },
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Importar respaldo" }));
+
+    expect(await screen.findByText(/No se pudo importar la bóveda/)).toBeTruthy();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Mi bóveda" })).toBeTruthy();
+  });
+
+  it("returns to login when an import command reports the session locked", async () => {
+    mockedOpen.mockResolvedValue("/home/user/backup.db");
+    mockRoutes({
+      list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
+      import_vault: () => {
+        throw "Locked";
+      },
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Importar respaldo" }));
+
+    expect(await screen.findByLabelText("Contraseña maestra")).toBeTruthy();
+    expect(screen.queryByText("GitHub")).toBeNull();
   });
 });
 

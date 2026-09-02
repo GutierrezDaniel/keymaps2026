@@ -523,7 +523,11 @@ html.phase-transition::view-transition-new(root) {
 .vault-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 0.5rem;
+  /* The backup actions join the header controls; allow wrapping so narrow
+     windows never clip the new buttons. */
+  flex-wrap: wrap;
 }
 
 /* The secondary header action (e.g. "Administrar categorías") keeps the

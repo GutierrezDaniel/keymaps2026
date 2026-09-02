@@ -9,7 +9,7 @@
 //   is how the Rust 5-minute auto-lock surfaces to the UI).
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Lock, Plus, Tags } from "lucide-react";
+import { Download, Lock, Plus, Tags, Upload } from "lucide-react";
 import { api, toCommandError } from "./api";
 import type {
   EntrySummary,
@@ -28,6 +28,7 @@ import {
   DeleteConfirm,
   EntryCard,
   EntryModal,
+  ImportConfirmModal,
   SearchFilters,
 } from "./components";
 
@@ -92,6 +93,11 @@ function spanishMessage(error: CommandError): string {
     case "Clipboard":
     case "Backup":
       return error.message ? `Ocurrió un error: ${error.message}` : "Ocurrió un error interno.";
+    case "Import":
+      // Generic, secret/path-free copy: the backend deliberately maps every
+      // import storage failure to the payload-free `Import` variant (design
+      // "generic Spanish error copy without secrets or paths").
+      return "No se pudo importar la bóveda. Verifica que el archivo sea un respaldo válido e inténtalo de nuevo.";
     default:
       return "Ocurrió un error inesperado.";
   }
@@ -246,6 +252,9 @@ export default function App() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<EntrySummary | null>(null);
   const [deleting, setDeleting] = useState<EntrySummary | null>(null);
+  /** Pending validated import awaiting explicit replacement confirmation:
+   *  the selected backup path (vault-import "Validate before replacement"). */
+  const [importConfirm, setImportConfirm] = useState<{ path: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [backoff, setBackoff] = useState<number | null>(null);
@@ -272,6 +281,7 @@ export default function App() {
     setLeavingId(null);
     setEditing(null);
     setDeleting(null);
+    setImportConfirm(null);
     setFormOpen(false);
     setMorphOriginId(null);
     setMorphActive(false);
@@ -422,6 +432,87 @@ export default function App() {
     }
     // The sheet folds back to the locked page like closing the codebook.
     withViewTransition(() => lockScreen(), true);
+  }
+
+  // -----------------------------------------------------------------------
+  // Vault backup actions (vault-backup / vault-import specs). Only the
+  // unlocked header offers them; dialogs are native and the commands receive
+  // paths only (design "Dialog boundary").
+  // -----------------------------------------------------------------------
+
+  /** Native save dialog → encrypted export. A cancelled dialog is silent
+   *  (the selection is null); success shows a Spanish notice, failure a
+   *  Spanish error (vault-backup "Safe export availability"). */
+  async function handleExport() {
+    setError(null);
+    setNotice(null);
+    try {
+      const path = await api.chooseExportPath();
+      if (path === null) return; // cancelled: no feedback
+      await api.export(path);
+      setNotice("Respaldo exportado correctamente.");
+    } catch (raw) {
+      const commandError = toCommandError(raw);
+      if (commandError.kind === "Locked") {
+        lockScreen();
+      } else {
+        setError(spanishMessage(commandError));
+      }
+    }
+  }
+
+  /** Native open dialog → preview validation (`confirmed === false`, no
+   *  write). A cancelled dialog is silent; a validated initialized backup
+   *  opens the replacement confirmation, any failure shows a Spanish error
+   *  and leaves the current vault untouched (vault-import "Validate before
+   *  replacement"). */
+  async function handleImportSelect() {
+    setError(null);
+    setNotice(null);
+    try {
+      const path = await api.chooseImportPath();
+      if (path === null) return; // cancelled: no feedback
+      const result = await api.importVault(path, false);
+      if (result.status === "confirmation_required") {
+        setImportConfirm({ path });
+      }
+    } catch (raw) {
+      const commandError = toCommandError(raw);
+      if (commandError.kind === "Locked") {
+        lockScreen();
+      } else {
+        setError(spanishMessage(commandError));
+      }
+    }
+  }
+
+  /** Confirmed import (`confirmed === true`, atomic replacement). On
+   *  `applied` the backend already relocked and zeroized the prior session
+   *  (vault-import "Relock and reauthenticate after import"), so the UI
+   *  returns to login where the imported vault's master password is
+   *  required. Any failure keeps the current vault active. */
+  async function handleImportConfirm() {
+    const pending = importConfirm;
+    if (!pending) return;
+    setImportConfirm(null);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await api.importVault(pending.path, true);
+      if (result.status === "applied") {
+        lockScreen();
+        setNotice(
+          "Bóveda reemplazada correctamente. Inicia sesión con la contraseña maestra del respaldo importado.",
+        );
+      }
+    } catch (raw) {
+      const commandError = toCommandError(raw);
+      if (commandError.kind === "Locked") {
+        lockScreen();
+      } else {
+        setError(spanishMessage(commandError));
+      }
+    }
   }
 
   function handleFiltersChange(next: Filters) {
@@ -659,6 +750,14 @@ export default function App() {
             <Plus size={16} aria-hidden="true" />
             Nueva entrada
           </button>
+          <button type="button" className="action-button" onClick={() => void handleExport()}>
+            <Download size={15} aria-hidden="true" />
+            Exportar respaldo
+          </button>
+          <button type="button" className="action-button" onClick={() => void handleImportSelect()}>
+            <Upload size={15} aria-hidden="true" />
+            Importar respaldo
+          </button>
           <button type="button" className="action-button" onClick={() => setAdminOpen(true)}>
             <Tags size={15} aria-hidden="true" />
             Administrar categorías
@@ -722,6 +821,13 @@ export default function App() {
           entry={deleting}
           onConfirm={handleConfirmDelete}
           onCancel={() => setDeleting(null)}
+        />
+      )}
+
+      {importConfirm && (
+        <ImportConfirmModal
+          onConfirm={() => void handleImportConfirm()}
+          onCancel={() => setImportConfirm(null)}
         />
       )}
 
