@@ -46,9 +46,9 @@ Chain strategy: pending
 ## Slice 3: React UI and Verification
 
 ### Phase 4: Dialog and Presentation
-- [ ] 4.1 Modify `src/ui/api.tsx` with native save/open wrappers, timestamped `clavemaestra-backup-YYYY-MM-DD-HHmm.db`, nullable selection, and typed `importVault(path, confirmed)`.
-- [ ] 4.2 Modify `src/ui/App.tsx`/`components.tsx`: unlocked-header-only actions, dialogs, Spanish feedback, replacement modal with Cancel/Confirm, and login return after `Applied`.
+- [x] 4.1 Modify `src/ui/api.tsx` with native save/open wrappers, timestamped `clavemaestra-backup-YYYY-MM-DD-HHmm.db`, nullable selection, and typed `importVault(path, confirmed)`.
+- [x] 4.2 Modify `src/ui/App.tsx`/`components.tsx`: unlocked-header-only actions, dialogs, Spanish feedback, replacement modal with Cancel/Confirm, and login return after `Applied`.
 
 ### Phase 5: UI Tests and Final Checks
-- [ ] 5.1 Extend `src/ui/api.test.tsx`, `App.test.tsx`, and `components.test.tsx` for dialog options/name/null cancel, locked visibility, Spanish notices/errors/modal, cancel/failure, and relock/login.
-- [ ] 5.2 Run Rust/UI/build verification; confirm encrypted-only export, no migration, commit-level rollback, and no threat RED tasks because every matrix row is N/A.
+- [x] 5.1 Extend `src/ui/api.test.tsx`, `App.test.tsx`, and `components.test.tsx` for dialog options/name/null cancel, locked visibility, Spanish notices/errors/modal, cancel/failure, and relock/login.
+- [x] 5.2 Run Rust/UI/build verification; confirm encrypted-only export, no migration, commit-level rollback, and no threat RED tasks because every matrix row is N/A.
