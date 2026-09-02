@@ -14,6 +14,7 @@ import {
   MaskedPassword,
   SearchFilters,
   CategoryAdminModal,
+  ImportConfirmModal,
 } from "./components";
 
 const SUMMARY: EntrySummary = {
@@ -587,6 +588,29 @@ describe("CategoryAdminModal — administration controls", () => {
   it("shows the entry count next to an in-use category row", () => {
     renderAdmin({ usage: { trabajo: 3, estudio: 0 } });
     expect(screen.getByText("3 entradas")).toBeTruthy();
+  });
+});
+
+describe("ImportConfirmModal — Spanish replacement confirmation", () => {
+  it("explains the replacement and offers Cancel/Confirm in Spanish", () => {
+    render(<ImportConfirmModal onConfirm={() => undefined} onCancel={() => undefined} />);
+    const dialog = screen.getByRole("alertdialog", { name: "Confirmar importación" });
+    expect(within(dialog).getByText(/Se reemplazará la bóveda actual/)).toBeTruthy();
+    expect(within(dialog).getByText("Esta acción no se puede deshacer.")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Importar" })).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Cancelar" })).toBeTruthy();
+  });
+
+  it("calls onConfirm from the Importar action and onCancel from Cancelar", () => {
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    render(<ImportConfirmModal onConfirm={onConfirm} onCancel={onCancel} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Importar" }));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 });
 
