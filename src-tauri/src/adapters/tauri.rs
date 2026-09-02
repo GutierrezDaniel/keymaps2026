@@ -2,8 +2,9 @@
 //!
 //! This module holds the MVP's application state ([`VaultApp`]) plus the ten
 //! design commands (`unlock`, `lock`, `list`, `get_entry_details`, `create`,
-//! `update`, `delete`, `export`, `copy_field`, `record_activity`) and the
-//! vault-creation command the design's data flow requires (`create_vault`).
+//! `update`, `delete`, `export`, `copy_field`, `record_activity`), the
+//! vault-creation command the design's data flow requires (`create_vault`),
+//! and the async vault data commands (`export_vault`, `import_vault`).
 //!
 //! Structure:
 //! - the session ([`Session`]) owns the derived `VaultKey` and zeroizes it on
@@ -13,6 +14,9 @@
 //!   on success (vault-session "Bounded login attempts");
 //! - inactivity auto-lock ([`SESSION_TIMEOUT`]) runs both lazily before every
 //!   command and from a background thread in the desktop shell;
+//! - `VaultApp` is managed as `Arc<VaultApp>` so the async vault commands can
+//!   clone it into `spawn_blocking`: blocking file work (export/import) never
+//!   freezes the main thread (design "Blocking work");
 //! - the `#[tauri::command]` glue is feature-gated so `cargo test --lib` stays
 //!   headless while the shell compiles with `--features tauri-app`.
 
@@ -29,6 +33,7 @@ use crate::adapters::backup::{BackupError, BackupService};
 use crate::adapters::clipboard::{Clipboard, CLIPBOARD_EXPIRY};
 use crate::adapters::crypto::argon2_aes::Argon2Aes;
 use crate::adapters::persistence::sqlite::SqliteVaultRepository;
+use crate::core::application::vault_import_service::{ImportResult, ImportServiceError, VaultImportService};
 use crate::core::application::vault_service::{ServiceError, UpdateCategoryResult, VaultService};
 use crate::core::domain::entry::{
     Category, EntryDetails, EntryInput, EntryRecord, EntrySummary, Filters, RecordId,
@@ -197,6 +202,8 @@ pub enum CommandError {
     Clipboard(String),
     #[error("backup failure: {0}")]
     Backup(String),
+    #[error("vault import failed")]
+    Import,
 }
 
 impl From<CryptoError> for CommandError {
@@ -245,6 +252,20 @@ impl From<BackupError> for CommandError {
             BackupError::Locked => CommandError::Locked,
             BackupError::NoVaultFile => CommandError::Backup(e.to_string()),
             BackupError::Store(s) | BackupError::Io(s) => CommandError::Backup(s),
+        }
+    }
+}
+
+impl From<ImportServiceError> for CommandError {
+    fn from(e: ImportServiceError) -> Self {
+        match e {
+            // The session gate maps to the shared Locked kind. Every storage
+            // failure maps to the generic, payload-free `Import` variant so
+            // underlying payloads (which may embed paths) never reach the
+            // frontend (design: "generic Spanish error copy without secrets or
+            // paths"; task 3.3).
+            ImportServiceError::Locked => CommandError::Locked,
+            ImportServiceError::Storage(_) => CommandError::Import,
         }
     }
 }
@@ -419,6 +440,25 @@ impl From<UpdateCategoryResult> for UpdateCategoryResultDto {
     }
 }
 
+/// Wire result of `import_vault`: either the candidate validated and awaits
+/// explicit confirmation (no write), or the confirmed replacement was applied
+/// and the session relocked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case", tag = "status")]
+pub enum ImportResultDto {
+    ConfirmationRequired,
+    Applied,
+}
+
+impl From<ImportResult> for ImportResultDto {
+    fn from(result: ImportResult) -> Self {
+        match result {
+            ImportResult::ConfirmationRequired => ImportResultDto::ConfirmationRequired,
+            ImportResult::Applied => ImportResultDto::Applied,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Application state: one instance managed by the Tauri shell.
 // ---------------------------------------------------------------------------
@@ -477,6 +517,7 @@ pub struct VaultApp {
     backoff: Mutex<BackoffPolicy>,
     clipboard: Clipboard,
     backup: BackupService,
+    import: VaultImportService<Arc<Mutex<SqliteVaultRepository>>>,
 }
 
 impl VaultApp {
@@ -484,6 +525,7 @@ impl VaultApp {
         let shared = Arc::new(Mutex::new(repo));
         let service = VaultService::new(Arc::clone(&shared), Argon2Aes, Argon2Aes);
         let backup = BackupService::new(Arc::clone(&shared));
+        let import = VaultImportService::new(Arc::clone(&shared));
         Self {
             repo: shared,
             service,
@@ -493,6 +535,7 @@ impl VaultApp {
             backoff: Mutex::new(BackoffPolicy::new()),
             clipboard,
             backup,
+            import,
         }
     }
 
@@ -676,6 +719,29 @@ impl VaultApp {
         Ok(self.backup.export(true, dest)?)
     }
 
+    /// Import an encrypted native vault from `source` (vault-import spec).
+    ///
+    /// `confirmed == false` validates only and returns
+    /// [`ImportResult::ConfirmationRequired`] with no write; `confirmed ==
+    /// true` revalidates and atomically replaces the active vault. Gated on
+    /// the unlocked session through the explicit `unlocked` service parameter
+    /// (Slice 1 pattern). On [`ImportResult::Applied`] the prior session is
+    /// invalidated and its derived key zeroized, so the imported vault's
+    /// master password is required again (vault-import "Relock and
+    /// reauthenticate after import").
+    pub fn import_backup(
+        &self,
+        source: &Path,
+        confirmed: bool,
+    ) -> Result<ImportResult, CommandError> {
+        self.require_unlocked()?;
+        let result = self.import.import(true, confirmed, source)?;
+        if result == ImportResult::Applied {
+            self.lock();
+        }
+        Ok(result)
+    }
+
     /// Copy a field to the clipboard with the 20s conditional clear. Refused
     /// while locked (vault-entries "Copy is unavailable while locked").
     pub fn copy_field(&self, id: &RecordId, field: CopyField) -> Result<(), CommandError> {
@@ -751,7 +817,7 @@ pub fn build(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
             let repo = SqliteVaultRepository::open(data_dir.join("vault.db"))?;
             let clipboard = Clipboard::new()?;
             let state = VaultApp::new(repo, clipboard);
-            app.manage(state);
+            app.manage(Arc::new(state));
             spawn_auto_lock_thread(app.handle().clone());
             Ok(())
         })
@@ -765,13 +831,14 @@ pub fn build(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
             create,
             update,
             delete,
-            export,
+            export_vault,
             copy_field,
             record_activity,
             list_categories,
             create_category,
             update_category,
-            delete_category
+            delete_category,
+            import_vault
         ])
 }
 
@@ -781,7 +848,7 @@ pub fn build(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> 
 fn spawn_auto_lock_thread(app: tauri::AppHandle) {
     std::thread::spawn(move || loop {
         std::thread::sleep(AUTO_LOCK_CHECK_INTERVAL);
-        if let Some(state) = app.try_state::<VaultApp>() {
+        if let Some(state) = app.try_state::<Arc<VaultApp>>() {
             state.check_auto_lock();
         }
     });
@@ -789,13 +856,13 @@ fn spawn_auto_lock_thread(app: tauri::AppHandle) {
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn create_vault(state: tauri::State<'_, VaultApp>, req: UnlockRequest) -> Result<(), CommandError> {
+fn create_vault(state: tauri::State<'_, Arc<VaultApp>>, req: UnlockRequest) -> Result<(), CommandError> {
     state.create_vault(req.master_password)
 }
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn unlock(state: tauri::State<'_, VaultApp>, req: UnlockRequest) -> Result<(), CommandError> {
+fn unlock(state: tauri::State<'_, Arc<VaultApp>>, req: UnlockRequest) -> Result<(), CommandError> {
     state.unlock(req.master_password)
 }
 
@@ -809,7 +876,7 @@ fn lock(state: tauri::State<'_, VaultApp>) -> Result<(), CommandError> {
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn list(
-    state: tauri::State<'_, VaultApp>,
+    state: tauri::State<'_, Arc<VaultApp>>,
     filters: Option<FilterDto>,
 ) -> Result<Vec<EntrySummaryDto>, CommandError> {
     let filters = filters.map(Into::into).unwrap_or_default();
@@ -826,7 +893,7 @@ fn list_emails(state: tauri::State<'_, VaultApp>) -> Result<Vec<String>, Command
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn get_entry_details(
-    state: tauri::State<'_, VaultApp>,
+    state: tauri::State<'_, Arc<VaultApp>>,
     id: String,
 ) -> Result<EntryDetailsDto, CommandError> {
     let id: RecordId = id.parse().map_err(|_| CommandError::InvalidField)?;
@@ -836,7 +903,7 @@ fn get_entry_details(
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn create(
-    state: tauri::State<'_, VaultApp>,
+    state: tauri::State<'_, Arc<VaultApp>>,
     input: EntryInputDto,
 ) -> Result<String, CommandError> {
     let input: EntryInput = input.into();
@@ -847,7 +914,7 @@ fn create(
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn update(
-    state: tauri::State<'_, VaultApp>,
+    state: tauri::State<'_, Arc<VaultApp>>,
     id: String,
     input: EntryInputDto,
 ) -> Result<(), CommandError> {
@@ -857,21 +924,52 @@ fn update(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn delete(state: tauri::State<'_, VaultApp>, id: String) -> Result<(), CommandError> {
+fn delete(state: tauri::State<'_, Arc<VaultApp>>, id: String) -> Result<(), CommandError> {
     let id: RecordId = id.parse().map_err(|_| CommandError::InvalidField)?;
     state.delete_entry(&id)
 }
 
+/// Async export command: runs the existing `BackupService::export` path on a
+/// blocking thread so large vaults never freeze the main thread (design
+/// "Blocking work"). Refused while locked (vault-backup "Safe export
+/// availability"). The session gate runs inside `VaultApp::export_backup`,
+/// which passes the unlocked state as the service's explicit parameter.
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn export(state: tauri::State<'_, VaultApp>, path: String) -> Result<(), CommandError> {
-    state.export_backup(Path::new(&path))
+async fn export_vault(
+    state: tauri::State<'_, Arc<VaultApp>>,
+    dest: String,
+) -> Result<(), CommandError> {
+    let app = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || app.export_backup(Path::new(&dest)))
+        .await
+        .map_err(|_| CommandError::Backup("export worker failed unexpectedly".into()))?
+}
+
+/// Async import command: validates `path` (preview) or validates-and-replaces
+/// (`confirmed == true`) on a blocking thread, returning the tagged result.
+/// `Applied` invalidates the session inside `VaultApp` so the imported vault's
+/// master password is required again (vault-import "Relock and reauthenticate
+/// after import"). Storage failures surface as the generic, payload-free
+/// `Import` error (no secrets or paths on the wire).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn import_vault(
+    state: tauri::State<'_, Arc<VaultApp>>,
+    path: String,
+    confirmed: bool,
+) -> Result<ImportResultDto, CommandError> {
+    let app = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || app.import_backup(Path::new(&path), confirmed))
+        .await
+        .map_err(|_| CommandError::Import)?
+        .map(ImportResultDto::from)
 }
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn copy_field(
-    state: tauri::State<'_, VaultApp>,
+    state: tauri::State<'_, Arc<VaultApp>>,
     id: String,
     field: CopyField,
 ) -> Result<(), CommandError> {
@@ -896,7 +994,7 @@ fn list_categories(state: tauri::State<'_, VaultApp>) -> Result<Vec<CategoryDto>
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn create_category(
-    state: tauri::State<'_, VaultApp>,
+    state: tauri::State<'_, Arc<VaultApp>>,
     input: CategoryDto,
 ) -> Result<(), CommandError> {
     state.create_category(&input.into())
@@ -905,7 +1003,7 @@ fn create_category(
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn update_category(
-    state: tauri::State<'_, VaultApp>,
+    state: tauri::State<'_, Arc<VaultApp>>,
     request: UpdateCategoryRequest,
 ) -> Result<UpdateCategoryResultDto, CommandError> {
     Ok(state.update_category(&request)?.into())
@@ -913,7 +1011,7 @@ fn update_category(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn delete_category(state: tauri::State<'_, VaultApp>, name: String) -> Result<(), CommandError> {
+fn delete_category(state: tauri::State<'_, Arc<VaultApp>>, name: String) -> Result<(), CommandError> {
     state.delete_category(&name)
 }
 
@@ -924,6 +1022,7 @@ mod tests {
     use super::*;
     use crate::adapters::clipboard::tests::FakeClipboard;
     use crate::core::domain::entry::Filters;
+    use crate::core::ports::vault_import_storage::ImportStorageError;
     use tempfile::TempDir;
 
     const MASTER_PASSWORD: &str = "correct horse battery staple";
@@ -1307,6 +1406,209 @@ mod tests {
 
         let reopened = SqliteVaultRepository::open(&dest).unwrap();
         assert!(reopened.is_initialized().unwrap());
+    }
+
+    // -----------------------------------------------------------------------
+    // Vault import command (vault-import spec; task 3.3).
+    // -----------------------------------------------------------------------
+
+    /// A file-backed vault seeded with MASTER_PASSWORD, unlocked, holding one
+    /// entry, exported to `<dir>/backup.db`; returns that backup path.
+    fn seeded_export(dir: &TempDir) -> std::path::PathBuf {
+        let app = file_app(dir);
+        app.create_vault(secret(MASTER_PASSWORD)).unwrap();
+        app.unlock(secret(MASTER_PASSWORD)).unwrap();
+        app.create_entry(&entry_input("github", "imported-secret"))
+            .unwrap();
+        let dest = dir.path().join("backup.db");
+        app.export_backup(&dest).unwrap();
+        dest
+    }
+
+    #[test]
+    fn import_command_refuses_locked_session() {
+        let dir = TempDir::new().unwrap();
+        let app = file_app(&dir);
+        app.create_vault(secret(MASTER_PASSWORD)).unwrap();
+
+        // Never unlocked: preview and confirmed imports are both refused and
+        // the selected file is never opened (vault-import "Import is
+        // unavailable while locked").
+        let backup = dir.path().join("backup.db");
+        assert_eq!(
+            app.import_backup(&backup, false).unwrap_err(),
+            CommandError::Locked
+        );
+        assert_eq!(
+            app.import_backup(&backup, true).unwrap_err(),
+            CommandError::Locked
+        );
+    }
+
+    #[test]
+    fn import_preview_returns_confirmation_required_and_writes_nothing() {
+        let dir = TempDir::new().unwrap();
+        let backup_dir = TempDir::new().unwrap();
+        let backup = seeded_export(&backup_dir);
+
+        // Current vault: a different password and a different entry.
+        let app = file_app(&dir);
+        app.create_vault(secret("vault-b-password")).unwrap();
+        app.unlock(secret("vault-b-password")).unwrap();
+        app.create_entry(&entry_input("b-site", "b-secret")).unwrap();
+
+        let result = app.import_backup(&backup, false).unwrap();
+        assert_eq!(result, ImportResult::ConfirmationRequired);
+        assert!(!app.is_locked(), "preview must not relock the session");
+
+        // Nothing was replaced: the current vault still authenticates with its
+        // own password and still holds its own data.
+        app.lock();
+        app.unlock(secret("vault-b-password")).unwrap();
+        let entries = app.list_entries(&Filters::new()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].site, "b-site");
+    }
+
+    #[test]
+    fn confirmed_import_applies_relocks_and_requires_imported_password() {
+        let dir = TempDir::new().unwrap();
+        let backup_dir = TempDir::new().unwrap();
+        let backup = seeded_export(&backup_dir);
+
+        let app = file_app(&dir);
+        app.create_vault(secret("vault-b-password")).unwrap();
+        app.unlock(secret("vault-b-password")).unwrap();
+        app.create_entry(&entry_input("b-site", "b-secret")).unwrap();
+
+        let result = app.import_backup(&backup, true).unwrap();
+        assert_eq!(result, ImportResult::Applied);
+        assert!(app.is_locked(), "successful import must relock the app");
+
+        // The previous vault's password no longer authenticates (vault-import
+        // "Previous password is rejected")...
+        assert_eq!(
+            app.unlock(secret("vault-b-password")).unwrap_err(),
+            CommandError::AuthenticationFailed
+        );
+        // ...and the imported vault's master password does (vault-import
+        // "Successful import requires new authentication").
+        app.unlock(secret(MASTER_PASSWORD)).unwrap();
+        assert!(!app.is_locked());
+        let entries = app.list_entries(&Filters::new()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].site, "github");
+        assert_eq!(
+            app.get_entry_details(&entries[0].id)
+                .unwrap()
+                .password
+                .expose_secret(),
+            "imported-secret"
+        );
+    }
+
+    #[test]
+    fn import_rejects_invalid_file_and_leaves_current_vault_untouched() {
+        let dir = TempDir::new().unwrap();
+        let app = file_app(&dir);
+        app.create_vault(secret(MASTER_PASSWORD)).unwrap();
+        app.unlock(secret(MASTER_PASSWORD)).unwrap();
+
+        let bogus = dir.path().join("not-a-vault.db");
+        std::fs::write(&bogus, b"this is not a sqlite vault").unwrap();
+
+        assert_eq!(
+            app.import_backup(&bogus, false).unwrap_err(),
+            CommandError::Import
+        );
+        // The failure is safe: session stays unlocked and the current vault
+        // still authenticates (vault-import "Invalid or unreadable file").
+        assert!(!app.is_locked());
+        app.lock();
+        app.unlock(secret(MASTER_PASSWORD)).unwrap();
+        assert!(!app.is_locked());
+    }
+
+    #[test]
+    fn import_error_mapping_strips_paths_and_secrets() {
+        // Even a storage error whose payload embeds a path maps to the
+        // generic, payload-free `Import` variant (task 3.3: secret/path-free
+        // errors): no path may reach the wire in any representation.
+        let leaked = "/tmp/leaked-vault-path.db".to_string();
+        let err: CommandError =
+            ImportServiceError::Storage(ImportStorageError::Store(leaked.clone())).into();
+        assert_eq!(err, CommandError::Import);
+        assert!(
+            !err.to_string().contains(&leaked),
+            "error text must not carry the path"
+        );
+        // The wire shape is the bare unit variant: `"Import"`.
+        assert_eq!(
+            serde_json::to_value(&err).unwrap(),
+            serde_json::json!("Import")
+        );
+    }
+
+    #[test]
+    fn import_result_dto_serializes_as_tagged_enum() {
+        let preview = serde_json::to_value(ImportResultDto::from(
+            ImportResult::ConfirmationRequired,
+        ))
+        .unwrap();
+        assert_eq!(
+            preview,
+            serde_json::json!({ "status": "confirmation_required" })
+        );
+
+        let applied = serde_json::to_value(ImportResultDto::from(ImportResult::Applied)).unwrap();
+        assert_eq!(applied, serde_json::json!({ "status": "applied" }));
+    }
+
+    #[test]
+    fn import_clears_session_and_debug_output_masks_secrets() {
+        let dir = TempDir::new().unwrap();
+        let backup_dir = TempDir::new().unwrap();
+        let backup = seeded_export(&backup_dir);
+
+        let app = file_app(&dir);
+        app.create_vault(secret("vault-b-password")).unwrap();
+        app.unlock(secret("vault-b-password")).unwrap();
+        app.import_backup(&backup, true).unwrap();
+
+        // No stored/exposed key: the session is gone after a successful
+        // import, so no derived key remains reachable through the app state.
+        assert!(
+            app.session.lock().unwrap().is_none(),
+            "import must invalidate the session"
+        );
+
+        // Secret-bearing DTOs never expose their values through Debug output
+        // (vault-session "Lock clears secrets": no Debug exposure).
+        let req = UnlockRequest {
+            master_password: secret("hunter2"),
+        };
+        let debug = format!("{:?}", req);
+        assert!(
+            !debug.contains("hunter2"),
+            "Debug must mask the master password: {debug}"
+        );
+
+        let details = EntryDetailsDto {
+            summary: EntrySummaryDto {
+                id: "00".into(),
+                site: "github".into(),
+                link: "https://github".into(),
+                email: "a@b.c".into(),
+                username: "user".into(),
+                category: "trabajo".into(),
+            },
+            password: secret("hunter2"),
+        };
+        let debug = format!("{:?}", details);
+        assert!(
+            !debug.contains("hunter2"),
+            "Debug must mask the decrypted password: {debug}"
+        );
     }
 
     // -----------------------------------------------------------------------
