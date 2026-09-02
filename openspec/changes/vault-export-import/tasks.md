@@ -39,9 +39,9 @@ Chain strategy: pending
 ## Slice 2: Tauri Commands and Permissions
 
 ### Phase 3: IPC Wiring
-- [ ] 3.1 Modify `src-tauri/src/adapters/tauri.rs`: manage `Arc<VaultApp>`, clone into `spawn_blocking`, add async path-only commands and DTO/error mapping, and call `lock()` there on `Applied` to zeroize/invalidate.
-- [ ] 3.2 Update `src-tauri/Cargo.toml`/`Cargo.lock` (`tauri-plugin-dialog`) and `package.json`/`package-lock.json` (`@tauri-apps/plugin-dialog`); create `src-tauri/capabilities/default.json` with `core:default`, `dialog:allow-save`, `dialog:allow-open`; register plugin.
-- [ ] 3.3 Verify in `src-tauri/src/adapters/tauri.rs` tests locked rejection, unlocked parameter, tagged results, secret/path-free errors, relock, correct/incorrect imported-password login, no stored/exposed keys, configurable timeout, and non-debug secrets.
+- [x] 3.1 Modify `src-tauri/src/adapters/tauri.rs`: manage `Arc<VaultApp>`, clone into `spawn_blocking`, add async path-only commands and DTO/error mapping, and call `lock()` there on `Applied` to zeroize/invalidate.
+- [x] 3.2 Update `src-tauri/Cargo.toml`/`Cargo.lock` (`tauri-plugin-dialog`) and `package.json`/`package-lock.json` (`@tauri-apps/plugin-dialog`); create `src-tauri/capabilities/default.json` with `core:default`, `dialog:allow-save`, `dialog:allow-open`; register plugin.
+- [x] 3.3 Verify in `src-tauri/src/adapters/tauri.rs` tests locked rejection, unlocked parameter, tagged results, secret/path-free errors, relock, correct/incorrect imported-password login, no stored/exposed keys, configurable timeout, and non-debug secrets.
 
 ## Slice 3: React UI and Verification
 
