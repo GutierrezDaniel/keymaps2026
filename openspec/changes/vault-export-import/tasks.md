@@ -27,14 +27,14 @@ Chain strategy: pending
 ## Slice 1: Rust Core, Storage, and Export
 
 ### Phase 1: Application Contracts
-- [ ] 1.1 Create `src-tauri/src/core/ports/vault_import_storage.rs` with `VaultImportStorage`, secret-free `ImportStorageError`, and validate/replace methods; export from `src-tauri/src/core/ports/mod.rs`.
-- [ ] 1.2 Create `src-tauri/src/core/application/vault_import_service.rs` (export from `src-tauri/src/core/application/mod.rs`) with explicit `unlocked`/`confirmed`, preview validation, confirmed revalidation, and `ConfirmationRequired`/`Applied`.
+- [x] 1.1 Create `src-tauri/src/core/ports/vault_import_storage.rs` with `VaultImportStorage`, secret-free `ImportStorageError`, and validate/replace methods; export from `src-tauri/src/core/ports/mod.rs`.
+- [x] 1.2 Create `src-tauri/src/core/application/vault_import_service.rs` (export from `src-tauri/src/core/application/mod.rs`) with explicit `unlocked`/`confirmed`, preview validation, confirmed revalidation, and `ConfirmationRequired`/`Applied`.
 
 ### Phase 2: SQLite and Backup Implementation
-- [ ] 2.1 Modify `src-tauri/src/adapters/persistence/sqlite.rs` to validate with `PRAGMA query_only` (or staged temp copy), schema, initialized metadata, and salt/AEAD lengths; perform no migration/write.
-- [ ] 2.2 In `src-tauri/src/adapters/persistence/sqlite.rs`, stage beside `vault.db`, sync, cleanly close/checkpoint so rollback holds committed writes, install/reopen/verify stage, delete rollback only after success, and restore rollback or leave locked on failure.
-- [ ] 2.3 Modify `src-tauri/src/adapters/backup.rs` to retain checkpointed encrypted export, support direct overwrite, and never report partial output as valid.
-- [ ] 2.4 Verify in the Rust service/SQLite tests preview/no-write, invalid/unreadable and locked rejection, success/cancel, storage failure safety, read-only validation, rollback, and export overwrite.
+- [x] 2.1 Modify `src-tauri/src/adapters/persistence/sqlite.rs` to validate with `PRAGMA query_only` (or staged temp copy), schema, initialized metadata, and salt/AEAD lengths; perform no migration/write.
+- [x] 2.2 In `src-tauri/src/adapters/persistence/sqlite.rs`, stage beside `vault.db`, sync, cleanly close/checkpoint so rollback holds committed writes, install/reopen/verify stage, delete rollback only after success, and restore rollback or leave locked on failure.
+- [x] 2.3 Modify `src-tauri/src/adapters/backup.rs` to retain checkpointed encrypted export, support direct overwrite, and never report partial output as valid.
+- [x] 2.4 Verify in the Rust service/SQLite tests preview/no-write, invalid/unreadable and locked rejection, success/cancel, storage failure safety, read-only validation, rollback, and export overwrite.
 
 ## Slice 2: Tauri Commands and Permissions
 
