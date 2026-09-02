@@ -582,6 +582,49 @@ html.phase-transition::view-transition-new(root) {
   flex-wrap: wrap;
 }
 
+/* Backup actions dropdown (user correction, post-verify): the Download
+   trigger sits next to the lock button and opens a right-aligned menu below
+   it, styled with the same design tokens as .action-button (paper-raised,
+   ink, ink-faint border, radius, blue hover). */
+.backup-actions {
+  position: relative;
+  display: inline-flex;
+}
+
+.backup-actions-menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  z-index: 20;
+  min-width: 12.5rem;
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  border-top: 3px double var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 0.35rem;
+  animation: breathe-in 0.25s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.backup-actions-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.45rem 0.6rem;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--ink);
+  font-size: 0.88rem;
+}
+
+.backup-actions-item:hover {
+  background: var(--paper-deep);
+  color: var(--blue-deep);
+}
+
 /* The secondary header action (e.g. "Administrar categorías") keeps the
    icon and label on one line. */
 .vault-actions .action-button {

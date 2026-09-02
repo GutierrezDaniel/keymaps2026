@@ -381,17 +381,27 @@ describe("App — category administration", () => {
 });
 
 describe("App — vault backup actions (vault-backup / vault-import)", () => {
-  it("hides export and import while locked", async () => {
+  it("hides the backup actions trigger while locked", async () => {
     await reachLogin();
-    expect(screen.queryByRole("button", { name: "Exportar respaldo" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Importar respaldo" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Acciones de respaldo" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Exportar respaldo" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Importar respaldo" })).toBeNull();
   });
 
-  it("shows export and import only in the unlocked vault header", async () => {
+  it("exposes export and import from the download trigger in the unlocked header", async () => {
     bootUnlocked();
     await screen.findByRole("heading", { name: "Mi bóveda" });
-    expect(screen.getByRole("button", { name: "Exportar respaldo" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Importar respaldo" })).toBeTruthy();
+    const trigger = screen.getByRole("button", { name: "Acciones de respaldo" });
+    expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    // The previous standalone header buttons are gone.
+    expect(screen.queryByRole("button", { name: "Exportar respaldo" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Importar respaldo" })).toBeNull();
+
+    fireEvent.click(trigger);
+
+    expect(screen.getByRole("menuitem", { name: "Exportar respaldo" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Importar respaldo" })).toBeTruthy();
   });
 
   it("exports through the save dialog and shows a toast that auto-clears", async () => {
@@ -406,7 +416,8 @@ describe("App — vault backup actions (vault-backup / vault-import)", () => {
     await flush();
     expect(screen.getByRole("heading", { name: "Mi bóveda" })).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Exportar respaldo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Acciones de respaldo" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Exportar respaldo" }));
     await flush();
 
     expect(mockedInvoke).toHaveBeenCalledWith("export_vault", {
@@ -431,7 +442,8 @@ describe("App — vault backup actions (vault-backup / vault-import)", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "Mi bóveda" });
 
-    fireEvent.click(screen.getByRole("button", { name: "Exportar respaldo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Acciones de respaldo" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Exportar respaldo" }));
 
     await waitFor(() =>
       expect(mockedInvoke).not.toHaveBeenCalledWith("export_vault", expect.anything()),
@@ -451,7 +463,8 @@ describe("App — vault backup actions (vault-backup / vault-import)", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "Mi bóveda" });
 
-    fireEvent.click(screen.getByRole("button", { name: "Exportar respaldo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Acciones de respaldo" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Exportar respaldo" }));
 
     const toast = await screen.findByRole("alert");
     expect(toast.textContent).toContain("Ocurrió un error: disk full");
@@ -467,7 +480,8 @@ describe("App — vault backup actions (vault-backup / vault-import)", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "Mi bóveda" });
 
-    fireEvent.click(screen.getByRole("button", { name: "Importar respaldo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Acciones de respaldo" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Importar respaldo" }));
 
     await waitFor(() =>
       expect(mockedInvoke).not.toHaveBeenCalledWith("import_vault", expect.anything()),
@@ -485,7 +499,8 @@ describe("App — vault backup actions (vault-backup / vault-import)", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "Mi bóveda" });
 
-    fireEvent.click(screen.getByRole("button", { name: "Importar respaldo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Acciones de respaldo" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Importar respaldo" }));
 
     await waitFor(() =>
       expect(mockedInvoke).toHaveBeenCalledWith("import_vault", {
@@ -512,7 +527,8 @@ describe("App — vault backup actions (vault-backup / vault-import)", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "Mi bóveda" });
 
-    fireEvent.click(screen.getByRole("button", { name: "Importar respaldo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Acciones de respaldo" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Importar respaldo" }));
     await screen.findByRole("alertdialog", { name: "Confirmar importación" });
 
     fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
@@ -539,7 +555,8 @@ describe("App — vault backup actions (vault-backup / vault-import)", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "Mi bóveda" });
 
-    fireEvent.click(screen.getByRole("button", { name: "Importar respaldo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Acciones de respaldo" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Importar respaldo" }));
     await screen.findByRole("alertdialog", { name: "Confirmar importación" });
     fireEvent.click(screen.getByRole("button", { name: "Importar" }));
 
@@ -572,7 +589,8 @@ describe("App — vault backup actions (vault-backup / vault-import)", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "Mi bóveda" });
 
-    fireEvent.click(screen.getByRole("button", { name: "Importar respaldo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Acciones de respaldo" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Importar respaldo" }));
 
     const toast = await screen.findByRole("alert");
     expect(toast.textContent).toContain("No se pudo importar la bóveda");
@@ -592,7 +610,8 @@ describe("App — vault backup actions (vault-backup / vault-import)", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "Mi bóveda" });
 
-    fireEvent.click(screen.getByRole("button", { name: "Importar respaldo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Acciones de respaldo" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Importar respaldo" }));
 
     expect(await screen.findByLabelText("Contraseña maestra")).toBeTruthy();
     expect(screen.queryByText("GitHub")).toBeNull();

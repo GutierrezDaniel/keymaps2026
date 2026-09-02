@@ -9,7 +9,7 @@
 //   is how the Rust 5-minute auto-lock surfaces to the UI).
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Download, Lock, Plus, Tags, Upload } from "lucide-react";
+import { Lock, Plus, Tags } from "lucide-react";
 import { api, toCommandError } from "./api";
 import type {
   EntrySummary,
@@ -24,6 +24,7 @@ import type {
 } from "./api";
 import {
   BackoffNotice,
+  BackupActionsMenu,
   CategoryAdminModal,
   DeleteConfirm,
   EntryCard,
@@ -786,18 +787,14 @@ export default function App() {
             <Plus size={16} aria-hidden="true" />
             Nueva entrada
           </button>
-          <button type="button" className="action-button" onClick={() => void handleExport()}>
-            <Download size={15} aria-hidden="true" />
-            Exportar respaldo
-          </button>
-          <button type="button" className="action-button" onClick={() => void handleImportSelect()}>
-            <Upload size={15} aria-hidden="true" />
-            Importar respaldo
-          </button>
           <button type="button" className="action-button" onClick={() => setAdminOpen(true)}>
             <Tags size={15} aria-hidden="true" />
             Administrar categorías
           </button>
+          <BackupActionsMenu
+            onExport={() => void handleExport()}
+            onImport={() => void handleImportSelect()}
+          />
           <button type="button" className="icon-button" aria-label="Bloquear" onClick={handleLock}>
             <Lock size={18} />
           </button>
