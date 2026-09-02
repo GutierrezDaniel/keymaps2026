@@ -446,7 +446,7 @@ html.phase-transition::view-transition-new(root) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Toast — transient backup feedback (success/error). Fixed top-center, */
+/* Toast — transient backup feedback (success/error). Fixed bottom-center, */
 /* above every surface including modals, with the app's slide/fade      */
 /* entrance and the design tokens (paper-raised, ink, radius, shadow).  */
 /* ------------------------------------------------------------------ */
@@ -454,7 +454,7 @@ html.phase-transition::view-transition-new(root) {
 @keyframes toast-in {
   from {
     opacity: 0;
-    transform: translateX(-50%) translateY(-10px);
+    transform: translateX(-50%) translateY(10px);
   }
   to {
     opacity: 1;
@@ -464,7 +464,7 @@ html.phase-transition::view-transition-new(root) {
 
 .toast {
   position: fixed;
-  top: 1.2rem;
+  bottom: 1.2rem;
   left: 50%;
   transform: translateX(-50%);
   z-index: 60;
