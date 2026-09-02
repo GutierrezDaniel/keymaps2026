@@ -30,7 +30,9 @@ import {
   EntryModal,
   ImportConfirmModal,
   SearchFilters,
+  Toast,
 } from "./components";
+import { TOAST_DURATION_MS } from "./components";
 
 type Phase = "booting" | "create" | "locked" | "unlocked";
 
@@ -255,6 +257,13 @@ export default function App() {
   /** Pending validated import awaiting explicit replacement confirmation:
    *  the selected backup path (vault-import "Validate before replacement"). */
   const [importConfirm, setImportConfirm] = useState<{ path: string } | null>(null);
+  /** Transient backup feedback (user correction, post-verify): a single
+   *  toast at a time, auto-cleared by one timer so a new toast replaces an
+   *  old one without a stale timer firing later. */
+  const [toast, setToast] = useState<{ kind: "success" | "error"; message: string } | null>(
+    null,
+  );
+  const toastTimerRef = useRef<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [backoff, setBackoff] = useState<number | null>(null);
@@ -287,6 +296,26 @@ export default function App() {
     setMorphActive(false);
     setNotice(null);
   }
+
+  /** Show a transient toast (user correction, post-verify). A single
+   *  auto-clear timer guarantees the previous toast's timer is cleared when
+   *  a new toast replaces an old one. */
+  function showToast(kind: "success" | "error", message: string) {
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
+    setToast({ kind, message });
+    toastTimerRef.current = window.setTimeout(() => {
+      toastTimerRef.current = null;
+      setToast(null);
+    }, TOAST_DURATION_MS);
+  }
+
+  /** Clear the pending toast timer on unmount so it never fires into a
+   *  detached tree. */
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
+    };
+  }, []);
 
   /** Refresh the category map and its per-category entry counts. Categories
    *  and usage only change through the administration modal or entry saves,
@@ -441,34 +470,32 @@ export default function App() {
   // -----------------------------------------------------------------------
 
   /** Native save dialog → encrypted export. A cancelled dialog is silent
-   *  (the selection is null); success shows a Spanish notice, failure a
-   *  Spanish error (vault-backup "Safe export availability"). */
+   *  (the selection is null); success shows a success toast, failure an
+   *  error toast (vault-backup "Safe export availability"). */
   async function handleExport() {
     setError(null);
-    setNotice(null);
     try {
       const path = await api.chooseExportPath();
       if (path === null) return; // cancelled: no feedback
       await api.export(path);
-      setNotice("Respaldo exportado correctamente.");
+      showToast("success", "Respaldo exportado correctamente.");
     } catch (raw) {
       const commandError = toCommandError(raw);
       if (commandError.kind === "Locked") {
         lockScreen();
       } else {
-        setError(spanishMessage(commandError));
+        showToast("error", spanishMessage(commandError));
       }
     }
   }
 
   /** Native open dialog → preview validation (`confirmed === false`, no
    *  write). A cancelled dialog is silent; a validated initialized backup
-   *  opens the replacement confirmation, any failure shows a Spanish error
+   *  opens the replacement confirmation, any failure shows an error toast
    *  and leaves the current vault untouched (vault-import "Validate before
    *  replacement"). */
   async function handleImportSelect() {
     setError(null);
-    setNotice(null);
     try {
       const path = await api.chooseImportPath();
       if (path === null) return; // cancelled: no feedback
@@ -481,7 +508,7 @@ export default function App() {
       if (commandError.kind === "Locked") {
         lockScreen();
       } else {
-        setError(spanishMessage(commandError));
+        showToast("error", spanishMessage(commandError));
       }
     }
   }
@@ -489,19 +516,20 @@ export default function App() {
   /** Confirmed import (`confirmed === true`, atomic replacement). On
    *  `applied` the backend already relocked and zeroized the prior session
    *  (vault-import "Relock and reauthenticate after import"), so the UI
-   *  returns to login where the imported vault's master password is
-   *  required. Any failure keeps the current vault active. */
+   *  returns to login — where a success toast announces the imported vault's
+   *  master password is required. Any failure keeps the current vault
+   *  active. */
   async function handleImportConfirm() {
     const pending = importConfirm;
     if (!pending) return;
     setImportConfirm(null);
     setError(null);
-    setNotice(null);
     try {
       const result = await api.importVault(pending.path, true);
       if (result.status === "applied") {
         lockScreen();
-        setNotice(
+        showToast(
+          "success",
           "Bóveda reemplazada correctamente. Inicia sesión con la contraseña maestra del respaldo importado.",
         );
       }
@@ -510,7 +538,7 @@ export default function App() {
       if (commandError.kind === "Locked") {
         lockScreen();
       } else {
-        setError(spanishMessage(commandError));
+        showToast("error", spanishMessage(commandError));
       }
     }
   }
@@ -714,6 +742,9 @@ export default function App() {
       <div className="app-shell">
         <h1 className="app-title">Administrador de Contraseñas</h1>
         <CreateScreen error={error} onCreated={handleCreated} />
+        {toast && (
+          <Toast kind={toast.kind} message={toast.message} onDismiss={() => setToast(null)} />
+        )}
       </div>
     );
   }
@@ -729,6 +760,11 @@ export default function App() {
           onExpireBackoff={() => setBackoff(null)}
           onUnlock={handleUnlock}
         />
+        {/* The import-applied toast survives the relock and announces the
+            imported vault's password is required again. */}
+        {toast && (
+          <Toast kind={toast.kind} message={toast.message} onDismiss={() => setToast(null)} />
+        )}
       </div>
     );
   }
@@ -773,7 +809,6 @@ export default function App() {
           {error}
         </p>
       )}
-      {notice && <p className="notice">{notice}</p>}
 
       <SearchFilters
         filters={filters}
@@ -840,6 +875,10 @@ export default function App() {
         onDelete={handleDeleteCategory}
         onClose={() => setAdminOpen(false)}
       />
+
+      {toast && (
+        <Toast kind={toast.kind} message={toast.message} onDismiss={() => setToast(null)} />
+      )}
     </div>
   );
 }

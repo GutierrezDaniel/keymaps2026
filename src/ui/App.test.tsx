@@ -5,11 +5,12 @@
 //
 // The Tauri IPC module is mocked so everything runs headless in jsdom; the
 // typed client (`./api`) routes through the same mocked invoke.
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, within, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent, within, waitFor, act } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import App from "./App";
+import { TOAST_DURATION_MS } from "./components";
 import type { EntrySummary, EntryDetails, CategoryDto } from "./api";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -24,6 +25,23 @@ beforeEach(() => {
   mockedSave.mockReset();
   mockedOpen.mockReset();
 });
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+/** Flush pending microtask promise chains. Used in fake-timer tests, where
+ *  waitFor/findBy cannot run: @testing-library/dom only detects Jest fake
+ *  timers, so with Vitest fake timers its polling interval would never fire. */
+async function flush(): Promise<void> {
+  await act(async () => {
+    // Drain several rounds so chained awaits (dialog → command → toast)
+    // resolve and React flushes the resulting state updates.
+    for (let i = 0; i < 5; i += 1) {
+      await Promise.resolve();
+    }
+  });
+}
 
 const ENTRY: EntrySummary = {
   id: "id-1",
@@ -376,7 +394,8 @@ describe("App — vault backup actions (vault-backup / vault-import)", () => {
     expect(screen.getByRole("button", { name: "Importar respaldo" })).toBeTruthy();
   });
 
-  it("exports through the save dialog and shows a Spanish success notice", async () => {
+  it("exports through the save dialog and shows a toast that auto-clears", async () => {
+    vi.useFakeTimers();
     mockedSave.mockResolvedValue("/tmp/clavemaestra-backup.db");
     mockRoutes({
       list: () => [ENTRY],
@@ -384,16 +403,23 @@ describe("App — vault backup actions (vault-backup / vault-import)", () => {
       export_vault: () => undefined,
     });
     render(<App />);
-    await screen.findByRole("heading", { name: "Mi bóveda" });
+    await flush();
+    expect(screen.getByRole("heading", { name: "Mi bóveda" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Exportar respaldo" }));
+    await flush();
 
-    await waitFor(() =>
-      expect(mockedInvoke).toHaveBeenCalledWith("export_vault", {
-        dest: "/tmp/clavemaestra-backup.db",
-      }),
-    );
-    expect(await screen.findByText("Respaldo exportado correctamente.")).toBeTruthy();
+    expect(mockedInvoke).toHaveBeenCalledWith("export_vault", {
+      dest: "/tmp/clavemaestra-backup.db",
+    });
+    const toast = screen.getByRole("status");
+    expect(toast.textContent).toContain("Respaldo exportado correctamente.");
+
+    // Auto-dismisses after the toast duration.
+    act(() => {
+      vi.advanceTimersByTime(TOAST_DURATION_MS);
+    });
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("does nothing when the export save dialog is cancelled", async () => {
@@ -413,7 +439,7 @@ describe("App — vault backup actions (vault-backup / vault-import)", () => {
     expect(screen.queryByText("Respaldo exportado correctamente.")).toBeNull();
   });
 
-  it("reports an export failure with a Spanish error notice", async () => {
+  it("reports an export failure with a Spanish error toast", async () => {
     mockedSave.mockResolvedValue("/tmp/backup.db");
     mockRoutes({
       list: () => [ENTRY],
@@ -427,7 +453,8 @@ describe("App — vault backup actions (vault-backup / vault-import)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Exportar respaldo" }));
 
-    expect(await screen.findByText(/Ocurrió un error: disk full/)).toBeTruthy();
+    const toast = await screen.findByRole("alert");
+    expect(toast.textContent).toContain("Ocurrió un error: disk full");
     expect(screen.getByRole("heading", { name: "Mi bóveda" })).toBeTruthy();
   });
 
@@ -499,7 +526,7 @@ describe("App — vault backup actions (vault-backup / vault-import)", () => {
     expect(screen.getByRole("heading", { name: "Mi bóveda" })).toBeTruthy();
   });
 
-  it("confirms the import, relocks and returns to login with a Spanish notice", async () => {
+  it("confirms the import, relocks and returns to login with a success toast", async () => {
     mockedOpen.mockResolvedValue("/home/user/backup.db");
     mockRoutes({
       list: () => [ENTRY],
@@ -524,12 +551,16 @@ describe("App — vault backup actions (vault-backup / vault-import)", () => {
     );
     expect(await screen.findByLabelText("Contraseña maestra")).toBeTruthy();
     expect(screen.queryByText("GitHub")).toBeNull();
-    expect(
-      screen.getByText(/Inicia sesión con la contraseña maestra del respaldo importado/),
-    ).toBeTruthy();
+    // The relock lands on login with the success toast announcing that the
+    // imported vault's master password is required again.
+    const toast = screen.getByRole("status");
+    expect(toast.textContent).toContain("Bóveda reemplazada correctamente.");
+    expect(toast.textContent).toContain(
+      "Inicia sesión con la contraseña maestra del respaldo importado.",
+    );
   });
 
-  it("reports an invalid import selection with a Spanish error", async () => {
+  it("reports an invalid import selection with a Spanish error toast", async () => {
     mockedOpen.mockResolvedValue("/home/user/not-a-vault.db");
     mockRoutes({
       list: () => [ENTRY],
@@ -543,7 +574,8 @@ describe("App — vault backup actions (vault-backup / vault-import)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Importar respaldo" }));
 
-    expect(await screen.findByText(/No se pudo importar la bóveda/)).toBeTruthy();
+    const toast = await screen.findByRole("alert");
+    expect(toast.textContent).toContain("No se pudo importar la bóveda");
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(screen.getByRole("heading", { name: "Mi bóveda" })).toBeTruthy();
   });
