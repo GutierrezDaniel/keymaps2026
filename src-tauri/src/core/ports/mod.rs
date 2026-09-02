@@ -6,4 +6,5 @@
 pub mod cipher;
 pub mod clipboard;
 pub mod key_derivation;
+pub mod vault_import_storage;
 pub mod vault_repository;

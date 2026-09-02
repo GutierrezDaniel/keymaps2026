@@ -22,7 +22,10 @@
 //! - the connection is `!Sync` and never shared: every mutating operation runs
 //!   inside a private transaction, so PR 3 can wrap this adapter in a `Mutex`.
 
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use rusqlite::types::ToSql;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
@@ -30,10 +33,20 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use crate::core::domain::entry::{
     seed_categories, Category, EncryptedField, EntryRecord, Filters, RecordId,
 };
+use crate::core::ports::vault_import_storage::{ImportStorageError, VaultImportStorage};
 use crate::core::ports::vault_repository::{RepositoryError, VaultRepository};
 
 /// Bumped whenever the schema changes; stored in `PRAGMA user_version`.
 const SCHEMA_VERSION: i64 = 2;
+
+/// Minimum salt length accepted for an initialized vault (matches the
+/// `init_vault` guard).
+const MIN_SALT_LEN: usize = 16;
+/// AES-256-GCM nonce length used by the crypto adapter (the standard 96-bit
+/// nonce).
+const GCM_NONCE_LEN: usize = 12;
+/// AES-256-GCM authentication tag length appended to ciphertext.
+const GCM_TAG_LEN: usize = 16;
 
 /// Schema v1: vault metadata singleton + encrypted entries.
 const SCHEMA_V1: &str = "
@@ -191,6 +204,165 @@ impl SqliteVaultRepository {
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
             .map_err(store_err)?;
         Ok(())
+    }
+
+    /// Read-only validation of a candidate vault backup (vault-import
+    /// "Validate before replacement").
+    ///
+    /// The candidate is opened normally — a plain read-only open cannot read a
+    /// WAL vault without its `-shm` file — and immediately switched to
+    /// `PRAGMA query_only`, so this connection can never write, migrate, or
+    /// checkpoint the file. Only schema, metadata, and length checks run:
+    /// the vault's own tables must exist (`vault_metadata`, `entries`,
+    /// `categories`), the initialization singleton must carry a salt of at
+    /// least 16 bytes, and the validation field must use valid AEAD lengths
+    /// (12-byte nonce, ciphertext at least the 16-byte GCM tag). A backup
+    /// produced by this app is a post-checkpoint copy of a v2 vault, so all
+    /// three tables must be present.
+    pub fn validate_backup(source: impl AsRef<Path>) -> Result<(), ImportStorageError> {
+        // Open without SQLITE_OPEN_CREATE: a missing candidate must fail, and
+        // validation must never create files. A normal read-write open (rather
+        // than a read-only one) lets WAL candidates be read without a
+        // pre-existing `-shm` file.
+        let conn = Connection::open_with_flags(
+            source.as_ref(),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+        )
+        .map_err(map_import_err)?;
+        conn.pragma_update(None, "query_only", true)
+            .map_err(import_store_err)?;
+        for table in ["vault_metadata", "entries", "categories"] {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                    params![table],
+                    |r| r.get(0),
+                )
+                .map_err(import_store_err)?;
+            if !exists {
+                return Err(ImportStorageError::InvalidVault);
+            }
+        }
+        let row: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = conn
+            .query_row(
+                "SELECT salt, validation_nonce, validation_ciphertext
+                 FROM vault_metadata WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()
+            .map_err(import_store_err)?;
+        let (salt, nonce, ciphertext) = row.ok_or(ImportStorageError::InvalidVault)?;
+        if salt.len() < MIN_SALT_LEN
+            || nonce.len() != GCM_NONCE_LEN
+            || ciphertext.len() < GCM_TAG_LEN
+        {
+            return Err(ImportStorageError::InvalidVault);
+        }
+        Ok(())
+    }
+
+    /// Atomically replace the vault database with `source` (vault-import
+    /// "Confirmed atomic replacement"). The previous database is preserved as
+    /// a rollback file until the installed vault verifies.
+    ///
+    /// Sequence (design "File replacement"): stage a fully synced copy beside
+    /// `vault.db`; revalidate the staged bytes (the selected file may have
+    /// changed since the preview); checkpoint and close the active connection
+    /// so the rollback file holds every committed write; rename the current
+    /// database to `.rollback` and the stage into place; reopen and verify the
+    /// installed vault; delete the rollback only after success. On any
+    /// failure the previous database is restored, or the repository is left
+    /// with no usable connection so the command layer locks the app instead of
+    /// serving a partial vault.
+    pub fn replace_with_backup(&mut self, source: impl AsRef<Path>) -> Result<(), RepositoryError> {
+        let db_path = self
+            .path
+            .clone()
+            .ok_or_else(|| RepositoryError::Store("vault has no backing database file".into()))?;
+        let stage = stage_sibling(&db_path);
+        let rollback = rollback_sibling(&db_path);
+
+        // 1. Stage a fully synced copy beside the vault file: the final rename
+        //    stays on one filesystem and the imported bytes are durable before
+        //    anything is replaced.
+        fs::copy(source.as_ref(), &stage).map_err(io_err)?;
+        let staged = fs::File::open(&stage).map_err(io_err)?;
+        staged.sync_all().map_err(io_err)?;
+        drop(staged);
+
+        // 2. Revalidate the staged bytes before touching the vault (guards
+        //    against the selected file changing between preview and confirm).
+        if let Err(e) = Self::validate_backup(&stage) {
+            let _ = fs::remove_file(&stage);
+            return Err(RepositoryError::Store(e.to_string()));
+        }
+
+        // 3. Checkpoint so every committed write lives in the main file, then
+        //    close the active connection: no live connection may reference the
+        //    files being renamed (renames over open files are not portable to
+        //    Windows).
+        self.checkpoint()?;
+        self.conn = Connection::open_in_memory().map_err(store_err)?;
+
+        // 4. Swap: current -> rollback, stage -> current.
+        fs::rename(&db_path, &rollback).map_err(io_err)?;
+        if let Err(e) = fs::rename(&stage, &db_path) {
+            let _ = fs::remove_file(&stage);
+            return self.restore_after_failed_swap(
+                &db_path,
+                &rollback,
+                RepositoryError::Store(format!("could not install the imported vault: {e}")),
+            );
+        }
+
+        // 5. Reopen and verify the installed vault; only then delete the
+        //    rollback. Any failure restores the previous vault.
+        let installed = match Self::open_connection(&db_path) {
+            Ok(conn) => conn,
+            Err(e) => return self.restore_after_failed_swap(&db_path, &rollback, e),
+        };
+        self.conn = installed;
+        if !self.is_initialized().unwrap_or(false) {
+            return self.restore_after_failed_swap(
+                &db_path,
+                &rollback,
+                RepositoryError::Store("installed vault failed verification".into()),
+            );
+        }
+        fs::remove_file(&rollback).map_err(io_err)?;
+        Ok(())
+    }
+
+    /// Restore the previous vault after a failed swap: close the failed
+    /// installation's connection, remove its file, rename the rollback back
+    /// into place, and reopen it. Returns `cause` when restoration succeeds;
+    /// when it does not, the repository keeps an empty placeholder connection
+    /// so the app stays locked rather than serving a partial vault.
+    fn restore_after_failed_swap(
+        &mut self,
+        db_path: &Path,
+        rollback: &Path,
+        cause: RepositoryError,
+    ) -> Result<(), RepositoryError> {
+        // Close any connection to the failed installation before touching the
+        // files (removing/renaming open files is not portable to Windows).
+        self.conn = Connection::open_in_memory().map_err(store_err)?;
+        let _ = fs::remove_file(db_path);
+        match fs::rename(rollback, db_path) {
+            Ok(()) => {
+                self.conn = Self::open_connection(db_path)?;
+                Err(cause)
+            }
+            Err(restore_err) => Err(io_err(restore_err)),
+        }
+    }
+
+    /// Open a file-backed repository connection through the standard
+    /// initialization path (WAL, sync mode, foreign keys, migrations).
+    fn open_connection(path: &Path) -> Result<Connection, RepositoryError> {
+        let conn = Connection::open(path).map_err(store_err)?;
+        Ok(Self::from_conn(conn)?.conn)
     }
 
     fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<EntryRecord> {
@@ -423,6 +595,73 @@ impl VaultRepository for SqliteVaultRepository {
     }
 }
 
+/// Import storage for the shared, mutex-guarded repository (the shape the
+/// Tauri layer manages). Validation opens the candidate independently and
+/// needs no lock; the atomic swap takes the repository lock so no write can
+/// interleave with the file replacement.
+impl VaultImportStorage for Arc<Mutex<SqliteVaultRepository>> {
+    fn validate_initialized(&self, source: &Path) -> Result<(), ImportStorageError> {
+        SqliteVaultRepository::validate_backup(source)
+    }
+
+    fn replace_atomically(&self, source: &Path) -> Result<(), ImportStorageError> {
+        self.lock()
+            .unwrap()
+            .replace_with_backup(source)
+            .map_err(|e| ImportStorageError::Store(e.to_string()))
+    }
+}
+
+/// `<db>.import-stage`: the synced copy of the imported backup installed by
+/// the atomic swap, kept beside the vault so every rename stays on one
+/// filesystem.
+fn stage_sibling(db_path: &Path) -> PathBuf {
+    let mut name = db_path.file_name().unwrap_or_default().to_os_string();
+    name.push(".import-stage");
+    db_path.with_file_name(name)
+}
+
+/// `<db>.rollback`: the previous vault kept until the installed replacement
+/// verifies, then deleted.
+fn rollback_sibling(db_path: &Path) -> PathBuf {
+    let mut name = db_path.file_name().unwrap_or_default().to_os_string();
+    name.push(".rollback");
+    db_path.with_file_name(name)
+}
+
+/// Wrap an I/O error as a secret-free repository error.
+fn io_err(e: io::Error) -> RepositoryError {
+    RepositoryError::Store(e.to_string())
+}
+
+/// Map a candidate open failure: a file that is not a database is simply not
+/// an initialized vault; anything else (missing file, permissions) is an open
+/// failure.
+fn map_import_err(e: rusqlite::Error) -> ImportStorageError {
+    if matches!(
+        e,
+        rusqlite::Error::SqliteFailure(ref f, _) if f.code == rusqlite::ErrorCode::NotADatabase
+    ) {
+        ImportStorageError::InvalidVault
+    } else {
+        ImportStorageError::Open(e.to_string())
+    }
+}
+
+/// Wrap a validation `rusqlite` error as a secret-free import error. A file
+/// that is not a database (header check fails mid-query) is simply not an
+/// initialized vault.
+fn import_store_err(e: rusqlite::Error) -> ImportStorageError {
+    if matches!(
+        e,
+        rusqlite::Error::SqliteFailure(ref f, _) if f.code == rusqlite::ErrorCode::NotADatabase
+    ) {
+        ImportStorageError::InvalidVault
+    } else {
+        ImportStorageError::Store(e.to_string())
+    }
+}
+
 /// Apply pending migrations, tracked by `PRAGMA user_version`. Each step runs
 /// only when the recorded version is older, so re-running on an up-to-date
 /// database (or a partially migrated one) is a safe no-op.
@@ -460,4 +699,42 @@ fn seed_categories_table(conn: &Connection) -> Result<(), RepositoryError> {
 /// Wrap a `rusqlite` error as a secret-free repository error.
 fn store_err(e: rusqlite::Error) -> RepositoryError {
     RepositoryError::Store(e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::*;
+
+    /// The rollback restore path is not reachable through the public API (the
+    /// swap only needs it after the installation rename, which fails solely on
+    /// I/O faults), so the restore primitive is verified directly: a previous
+    /// vault moved aside must come back byte-for-byte and reopen.
+    #[test]
+    fn restore_after_failed_swap_reinstates_the_previous_vault() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("vault.db");
+        let mut repo = SqliteVaultRepository::open(&path).unwrap();
+        let original = fs::read(&path).unwrap();
+
+        // Simulate the swap point: the current vault was renamed to rollback
+        // and a broken installation sits at the vault path.
+        let rollback = rollback_sibling(&path);
+        fs::rename(&path, &rollback).unwrap();
+        fs::write(&path, b"corrupt installation").unwrap();
+
+        let cause = RepositoryError::Store("swap failed".into());
+        let err = repo.restore_after_failed_swap(&path, &rollback, cause.clone());
+        assert_eq!(err, Err(cause), "restore must surface the original failure");
+        assert!(!rollback.exists(), "rollback file must be consumed by the restore");
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            original,
+            "the previous vault must be restored byte-for-byte"
+        );
+        // The repository is usable again and points at the restored file.
+        assert_eq!(repo.db_path(), Some(path.as_path()));
+        assert!(!repo.is_initialized().unwrap());
+    }
 }
