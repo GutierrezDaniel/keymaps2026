@@ -10,6 +10,7 @@
 // tagged objects ({ Backoff: { seconds } }). `toCommandError` normalizes both
 // shapes so the UI can branch on a typed kind instead of raw payloads.
 import { invoke } from "@tauri-apps/api/core";
+import { open, save } from "@tauri-apps/plugin-dialog";
 
 // ---------------------------------------------------------------------------
 // Domain types (design "Interfaces / Contracts").
@@ -49,6 +50,15 @@ interface UpdateCategoryRequest {
 type UpdateCategoryResult =
   | { status: "applied" }
   | { status: "rename_preview"; affected_entries: number };
+
+/** Result of `import_vault`: either the candidate validated and awaits
+ *  explicit confirmation (no write), or the confirmed replacement was
+ *  applied and the session relocked. Internally tagged enum in Rust
+ *  (`tag = "status"`, snake_case): `{ status: "confirmation_required" }` or
+ *  `{ status: "applied" }`. */
+type ImportResult =
+  | { status: "confirmation_required" }
+  | { status: "applied" };
 
 /** Metadata-only entry view (no secret material) — `EntrySummaryDto`. */
 interface EntrySummary {
@@ -116,6 +126,7 @@ type CommandErrorKind =
   | "Store"
   | "Clipboard"
   | "Backup"
+  | "Import"
   | "Unknown";
 
 interface CommandError {
@@ -140,6 +151,7 @@ const UNIT_VARIANTS: Record<string, CommandErrorKind> = {
   CategoryNotFound: "CategoryNotFound",
   NotFound: "NotFound",
   InvalidField: "InvalidField",
+  Import: "Import",
 };
 
 const TAGGED_VARIANTS: Record<string, CommandErrorKind> = {
@@ -185,6 +197,16 @@ function passwordRequest(masterPassword: string): { req: { master_password: stri
 
 function filtersPayload(filters: Filters | null): { filters: Filters | null } {
   return { filters };
+}
+
+/** Default export filename (vault-backup "Native export dialog and default
+ *  filename"): `clavemaestra-backup-YYYY-MM-DD-HHmm.db`, date plus time. */
+function backupFileName(date: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const stamp =
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `-${pad(date.getHours())}${pad(date.getMinutes())}`;
+  return `clavemaestra-backup-${stamp}.db`;
 }
 
 const api = {
@@ -234,9 +256,42 @@ const api = {
     await invoke("delete", { id });
   },
 
-  /** Export the vault to `path` in its native encrypted format. */
+  /** Open the native save dialog with the timestamped default filename
+   *  (design "Interfaces / Contracts"); resolves with the chosen destination
+   *  or null when the user cancels. */
+  async chooseExportPath(): Promise<string | null> {
+    return save({
+      title: "Exportar respaldo",
+      defaultPath: backupFileName(),
+      filters: [{ name: "Base de datos", extensions: ["db"] }],
+    });
+  },
+
+  /** Open the native open dialog for a single backup file (design
+   *  "Interfaces / Contracts"); resolves with the chosen path or null when
+   *  the user cancels. */
+  async chooseImportPath(): Promise<string | null> {
+    return open({
+      title: "Seleccionar respaldo",
+      multiple: false,
+      directory: false,
+      filters: [{ name: "Base de datos", extensions: ["db"] }],
+    });
+  },
+
+  /** Export the vault to `dest` in its native encrypted format —
+   *  `export_vault`. The old synchronous `export` command was replaced by
+   *  this async path-only command (Slice 2), so the wire uses `dest`. */
   async export(path: string): Promise<void> {
-    await invoke("export", { path });
+    await invoke("export_vault", { dest: path });
+  },
+
+  /** Validate (`confirmed === false`, preview, no write) or validate-and-
+   *  replace (`confirmed === true`) the vault from `path` — `import_vault`.
+   *  Resolves the tagged result; `applied` means the backend relocked and
+   *  invalidated the prior session. */
+  async importVault(path: string, confirmed: boolean): Promise<ImportResult> {
+    return invoke<ImportResult>("import_vault", { path, confirmed });
   },
 
   /** Copy an entry field to the clipboard (20s conditional clear in Rust). */
@@ -280,6 +335,7 @@ export type {
   CategoryDto,
   UpdateCategoryRequest,
   UpdateCategoryResult,
+  ImportResult,
   EntrySummary,
   EntryDetails,
   EntryInput,
