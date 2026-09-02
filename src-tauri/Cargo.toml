@@ -24,7 +24,7 @@ default = []
 # webkit2gtk-4.1 / gtk3 / libsoup-3.0 system libraries, which are not present in
 # minimal/headless build environments. `cargo test --lib` runs with the default
 # (empty) feature set and therefore never pulls those system dependencies.
-tauri-app = ["dep:tauri", "dep:tauri-build"]
+tauri-app = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-dialog"]
 
 [dependencies]
 # Crypto core
@@ -50,6 +50,8 @@ arboard = "3.4"
 # Desktop shell (Phase 3 command registration). Gated — see the `tauri-app` feature.
 tauri = { version = "2", optional = true, features = [] }
 tauri-build = { version = "2", optional = true }
+# Native save/open dialogs for the vault backup actions (Slice 2, task 3.2).
+tauri-plugin-dialog = { version = "2", optional = true }
 
 [build-dependencies]
 tauri-build = { version = "2", optional = true , features = [] }

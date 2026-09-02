@@ -810,6 +810,7 @@ use tauri::Manager;
 #[cfg(feature = "tauri-app")]
 pub fn build(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<tauri::Wry> {
     builder
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // The vault database lives in the platform app-data directory.
             let data_dir = app.path().app_data_dir()?;
