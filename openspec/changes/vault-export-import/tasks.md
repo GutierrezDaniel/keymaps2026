@@ -52,3 +52,12 @@ Chain strategy: pending
 ### Phase 5: UI Tests and Final Checks
 - [x] 5.1 Extend `src/ui/api.test.tsx`, `App.test.tsx`, and `components.test.tsx` for dialog options/name/null cancel, locked visibility, Spanish notices/errors/modal, cancel/failure, and relock/login.
 - [x] 5.2 Run Rust/UI/build verification; confirm encrypted-only export, no migration, commit-level rollback, and no threat RED tasks because every matrix row is N/A.
+
+## UI Corrections (post-verify)
+
+User reviewed the running app and requested two UI corrections to the backup actions. Both are completed on `feature/vault-export-import-ui`:
+
+- [x] C1 Toast notifications: `Toast` presentational component (`TOAST_DURATION_MS = 3500`, auto-dismiss via setTimeout, manual × dismiss; `role="status"`/`aria-live="polite"` for success, `role="alert"`/`aria-live="assertive"` for errors). App owns a single auto-clear timer (previous timer cleared when a new toast replaces an old one) and renders the toast at app-shell level, so it also appears above the login screen after the import relock. Backup feedback (export success/failure, import failure, import applied) routes through the toast; the vault-view notice paragraph was removed and the login/create inline `error`/`notice` flows are unchanged. Fixed top-center, design tokens, slide/fade entrance.
+- [x] C2 Backup actions dropdown: the two standalone header `action-button`s were replaced by a `Download` icon-button trigger (`aria-label="Acciones de respaldo"`, `aria-haspopup="menu"`, `aria-expanded`) next to the lock button. `BackupActionsMenu` opens a right-aligned dropdown (Exportar respaldo / Importar respaldo with small Download/Upload icons) that closes on outside click, Escape, and after selecting an item; `Administrar categorías` and the lock button are unchanged.
+
+Verification: `npm test` 114 passed (api 29, components 50, App 35), `npm run build` clean, `cd src-tauri && cargo test` 99 passed.
