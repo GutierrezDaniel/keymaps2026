@@ -75,13 +75,31 @@ fn atomic_write(dest: &Path, bytes: &[u8]) -> Result<(), BackupError> {
         let mut file = fs::File::create(&tmp).map_err(io_err)?;
         file.write_all(bytes).map_err(io_err)?;
         file.sync_all().map_err(io_err)?;
-        fs::rename(&tmp, dest).map_err(io_err)?;
+        replace_file(&tmp, dest)?;
         Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&tmp);
     }
     result
+}
+
+/// Move the fully-written temp file onto `dest`, replacing an existing file.
+/// `fs::rename` already replaces atomically on Unix; on Windows it fails when
+/// the destination exists, so the old destination is removed first — only
+/// after the temp bytes are written and synced (vault-backup "Direct
+/// overwrite").
+#[cfg(windows)]
+fn replace_file(tmp: &Path, dest: &Path) -> Result<(), BackupError> {
+    if dest.exists() {
+        fs::remove_file(dest).map_err(io_err)?;
+    }
+    fs::rename(tmp, dest).map_err(io_err)
+}
+
+#[cfg(not(windows))]
+fn replace_file(tmp: &Path, dest: &Path) -> Result<(), BackupError> {
+    fs::rename(tmp, dest).map_err(io_err)
 }
 
 /// `<dest>.tmp` next to the destination, so the rename stays on one filesystem.
@@ -260,5 +278,30 @@ mod tests {
             .map(|e| e.password)
             .collect();
         assert_eq!(original, exported, "exported ciphertext/nonce must match the source");
+    }
+
+    // -----------------------------------------------------------------------
+    // vault-backup "Direct overwrite": an existing destination is replaced by
+    // a complete, valid backup (no stale or partial content survives).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn export_overwrites_an_existing_destination_file() {
+        let dir = TempDir::new().unwrap();
+        let (repo, _salt) = seeded_vault(&dir);
+        let backup = BackupService::new(repo);
+        let dest = dir.path().join("backup.db");
+
+        // A previous backup (or any pre-existing file) occupies the path.
+        fs::write(&dest, b"stale previous backup bytes").unwrap();
+
+        backup.export(true, &dest).unwrap();
+
+        // The destination now holds a complete, valid vault: stale bytes are
+        // gone and the file reopens as an initialized repository.
+        let reopened = SqliteVaultRepository::open(&dest).unwrap();
+        assert!(reopened.is_initialized().unwrap());
+        assert_eq!(reopened.list(&Filters::new()).unwrap().len(), 1);
+        assert!(!temp_sibling(&dest).exists(), "no temp file may remain after overwrite");
     }
 }
