@@ -24,12 +24,16 @@ import type {
 } from "./api";
 import {
   BackoffNotice,
+  BackupActionsMenu,
   CategoryAdminModal,
   DeleteConfirm,
   EntryCard,
   EntryModal,
+  ImportConfirmModal,
   SearchFilters,
+  Toast,
 } from "./components";
+import { TOAST_DURATION_MS } from "./components";
 
 type Phase = "booting" | "create" | "locked" | "unlocked";
 
@@ -92,6 +96,11 @@ function spanishMessage(error: CommandError): string {
     case "Clipboard":
     case "Backup":
       return error.message ? `Ocurrió un error: ${error.message}` : "Ocurrió un error interno.";
+    case "Import":
+      // Generic, secret/path-free copy: the backend deliberately maps every
+      // import storage failure to the payload-free `Import` variant (design
+      // "generic Spanish error copy without secrets or paths").
+      return "No se pudo importar la bóveda. Verifica que el archivo sea un respaldo válido e inténtalo de nuevo.";
     default:
       return "Ocurrió un error inesperado.";
   }
@@ -246,6 +255,16 @@ export default function App() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<EntrySummary | null>(null);
   const [deleting, setDeleting] = useState<EntrySummary | null>(null);
+  /** Pending validated import awaiting explicit replacement confirmation:
+   *  the selected backup path (vault-import "Validate before replacement"). */
+  const [importConfirm, setImportConfirm] = useState<{ path: string } | null>(null);
+  /** Transient backup feedback (user correction, post-verify): a single
+   *  toast at a time, auto-cleared by one timer so a new toast replaces an
+   *  old one without a stale timer firing later. */
+  const [toast, setToast] = useState<{ kind: "success" | "error"; message: string } | null>(
+    null,
+  );
+  const toastTimerRef = useRef<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [backoff, setBackoff] = useState<number | null>(null);
@@ -272,11 +291,32 @@ export default function App() {
     setLeavingId(null);
     setEditing(null);
     setDeleting(null);
+    setImportConfirm(null);
     setFormOpen(false);
     setMorphOriginId(null);
     setMorphActive(false);
     setNotice(null);
   }
+
+  /** Show a transient toast (user correction, post-verify). A single
+   *  auto-clear timer guarantees the previous toast's timer is cleared when
+   *  a new toast replaces an old one. */
+  function showToast(kind: "success" | "error", message: string) {
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
+    setToast({ kind, message });
+    toastTimerRef.current = window.setTimeout(() => {
+      toastTimerRef.current = null;
+      setToast(null);
+    }, TOAST_DURATION_MS);
+  }
+
+  /** Clear the pending toast timer on unmount so it never fires into a
+   *  detached tree. */
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
+    };
+  }, []);
 
   /** Refresh the category map and its per-category entry counts. Categories
    *  and usage only change through the administration modal or entry saves,
@@ -422,6 +462,86 @@ export default function App() {
     }
     // The sheet folds back to the locked page like closing the codebook.
     withViewTransition(() => lockScreen(), true);
+  }
+
+  // -----------------------------------------------------------------------
+  // Vault backup actions (vault-backup / vault-import specs). Only the
+  // unlocked header offers them; dialogs are native and the commands receive
+  // paths only (design "Dialog boundary").
+  // -----------------------------------------------------------------------
+
+  /** Native save dialog → encrypted export. A cancelled dialog is silent
+   *  (the selection is null); success shows a success toast, failure an
+   *  error toast (vault-backup "Safe export availability"). */
+  async function handleExport() {
+    setError(null);
+    try {
+      const path = await api.chooseExportPath();
+      if (path === null) return; // cancelled: no feedback
+      await api.export(path);
+      showToast("success", "Respaldo exportado correctamente.");
+    } catch (raw) {
+      const commandError = toCommandError(raw);
+      if (commandError.kind === "Locked") {
+        lockScreen();
+      } else {
+        showToast("error", spanishMessage(commandError));
+      }
+    }
+  }
+
+  /** Native open dialog → preview validation (`confirmed === false`, no
+   *  write). A cancelled dialog is silent; a validated initialized backup
+   *  opens the replacement confirmation, any failure shows an error toast
+   *  and leaves the current vault untouched (vault-import "Validate before
+   *  replacement"). */
+  async function handleImportSelect() {
+    setError(null);
+    try {
+      const path = await api.chooseImportPath();
+      if (path === null) return; // cancelled: no feedback
+      const result = await api.importVault(path, false);
+      if (result.status === "confirmation_required") {
+        setImportConfirm({ path });
+      }
+    } catch (raw) {
+      const commandError = toCommandError(raw);
+      if (commandError.kind === "Locked") {
+        lockScreen();
+      } else {
+        showToast("error", spanishMessage(commandError));
+      }
+    }
+  }
+
+  /** Confirmed import (`confirmed === true`, atomic replacement). On
+   *  `applied` the backend already relocked and zeroized the prior session
+   *  (vault-import "Relock and reauthenticate after import"), so the UI
+   *  returns to login — where a success toast announces the imported vault's
+   *  master password is required. Any failure keeps the current vault
+   *  active. */
+  async function handleImportConfirm() {
+    const pending = importConfirm;
+    if (!pending) return;
+    setImportConfirm(null);
+    setError(null);
+    try {
+      const result = await api.importVault(pending.path, true);
+      if (result.status === "applied") {
+        lockScreen();
+        showToast(
+          "success",
+          "Bóveda reemplazada correctamente. Inicia sesión con la contraseña maestra del respaldo importado.",
+        );
+      }
+    } catch (raw) {
+      const commandError = toCommandError(raw);
+      if (commandError.kind === "Locked") {
+        lockScreen();
+      } else {
+        showToast("error", spanishMessage(commandError));
+      }
+    }
   }
 
   function handleFiltersChange(next: Filters) {
@@ -623,6 +743,9 @@ export default function App() {
       <div className="app-shell">
         <h1 className="app-title">Administrador de Contraseñas</h1>
         <CreateScreen error={error} onCreated={handleCreated} />
+        {toast && (
+          <Toast kind={toast.kind} message={toast.message} onDismiss={() => setToast(null)} />
+        )}
       </div>
     );
   }
@@ -638,6 +761,11 @@ export default function App() {
           onExpireBackoff={() => setBackoff(null)}
           onUnlock={handleUnlock}
         />
+        {/* The import-applied toast survives the relock and announces the
+            imported vault's password is required again. */}
+        {toast && (
+          <Toast kind={toast.kind} message={toast.message} onDismiss={() => setToast(null)} />
+        )}
       </div>
     );
   }
@@ -663,6 +791,10 @@ export default function App() {
             <Tags size={15} aria-hidden="true" />
             Administrar categorías
           </button>
+          <BackupActionsMenu
+            onExport={() => void handleExport()}
+            onImport={() => void handleImportSelect()}
+          />
           <button type="button" className="icon-button" aria-label="Bloquear" onClick={handleLock}>
             <Lock size={18} />
           </button>
@@ -674,7 +806,6 @@ export default function App() {
           {error}
         </p>
       )}
-      {notice && <p className="notice">{notice}</p>}
 
       <SearchFilters
         filters={filters}
@@ -725,6 +856,13 @@ export default function App() {
         />
       )}
 
+      {importConfirm && (
+        <ImportConfirmModal
+          onConfirm={() => void handleImportConfirm()}
+          onCancel={() => setImportConfirm(null)}
+        />
+      )}
+
       <CategoryAdminModal
         open={adminOpen}
         categories={categories}
@@ -734,6 +872,10 @@ export default function App() {
         onDelete={handleDeleteCategory}
         onClose={() => setAdminOpen(false)}
       />
+
+      {toast && (
+        <Toast kind={toast.kind} message={toast.message} onDismiss={() => setToast(null)} />
+      )}
     </div>
   );
 }

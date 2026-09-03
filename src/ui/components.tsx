@@ -10,12 +10,14 @@ import {
   AtSign,
   Check,
   Copy,
+  Download,
   Eye,
   EyeOff,
   ListFilter,
   Pencil,
   Search,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { CATEGORY_PALETTE, toCommandError } from "./api";
@@ -472,6 +474,166 @@ export function DeleteConfirm({ entry, onConfirm, onCancel }: DeleteConfirmProps
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Import replacement confirmation (vault-ui "Import replacement
+// confirmation"). Presentational: the App owns the import command calls.
+// ---------------------------------------------------------------------------
+
+export interface ImportConfirmProps {
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+/** Spanish confirmation shown before a validated backup replaces the active
+ *  vault. The copy states the replacement explicitly and offers Cancel and
+ *  Confirm actions (vault-import "Validate before replacement"). */
+export function ImportConfirmModal({ onConfirm, onCancel }: ImportConfirmProps) {
+  return (
+    <div className="modal-overlay" role="presentation">
+      <div
+        className="modal"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label="Confirmar importación"
+      >
+        <h2>Importar respaldo</h2>
+        <p>Se reemplazará la bóveda actual por el respaldo seleccionado.</p>
+        <p className="warning">Esta acción no se puede deshacer.</p>
+        <div className="modal-actions">
+          <button type="button" className="action-button danger" onClick={onConfirm}>
+            Importar
+          </button>
+          <button type="button" className="action-button" onClick={onCancel}>
+            Cancelar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Toast — transient success/error feedback that auto-dismisses after the
+// toast duration (user correction, post-verify). Presentational: the App
+// owns the toast state and its single auto-clear timer; this component owns
+// only its own dismiss timer and the manual close button.
+// ---------------------------------------------------------------------------
+
+/** How long a toast stays visible before auto-dismissing. */
+export const TOAST_DURATION_MS = 3500;
+
+export interface ToastProps {
+  kind: "success" | "error";
+  message: string;
+  onDismiss: () => void;
+}
+
+/** Transient feedback banner: success reads as a polite status, error as an
+ *  assertive alert. Auto-dismisses after [`TOAST_DURATION_MS`]; the × button
+ *  dismisses manually. */
+export function Toast({ kind, message, onDismiss }: ToastProps) {
+  useEffect(() => {
+    const timer = window.setTimeout(onDismiss, TOAST_DURATION_MS);
+    return () => window.clearTimeout(timer);
+  }, [onDismiss, message]);
+
+  return (
+    <div
+      className={`toast toast-${kind}`}
+      role={kind === "error" ? "alert" : "status"}
+      aria-live={kind === "error" ? "assertive" : "polite"}
+    >
+      <span className="toast-message">{message}</span>
+      <button
+        type="button"
+        className="icon-button toast-dismiss"
+        aria-label="Cerrar notificación"
+        onClick={onDismiss}
+      >
+        <X size={15} />
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Backup actions menu — the unlocked header's Download trigger opens a
+// dropdown with the export/import actions (user correction, post-verify).
+// Presentational: owns only its open state; the App wires the callbacks.
+// ---------------------------------------------------------------------------
+
+export interface BackupActionsMenuProps {
+  onExport: () => void;
+  onImport: () => void;
+}
+
+/** Download trigger + dropdown for the vault backup actions. Opens on trigger
+ *  click, closes on outside click, Escape, or after selecting an item. */
+export function BackupActionsMenu({ onExport, onImport }: BackupActionsMenuProps) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocMouseDown(event: MouseEvent) {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    function onDocKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onDocMouseDown);
+    document.addEventListener("keydown", onDocKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onDocMouseDown);
+      document.removeEventListener("keydown", onDocKeyDown);
+    };
+  }, [open]);
+
+  function closeAfter(action: () => void) {
+    setOpen(false);
+    action();
+  }
+
+  return (
+    <div className="backup-actions" ref={rootRef}>
+      <button
+        type="button"
+        className="icon-button"
+        aria-label="Acciones de respaldo"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((previous) => !previous)}
+      >
+        <Download size={18} />
+      </button>
+      {open && (
+        <div className="backup-actions-menu" role="menu" aria-label="Acciones de respaldo">
+          <button
+            type="button"
+            role="menuitem"
+            className="backup-actions-item"
+            onClick={() => closeAfter(onExport)}
+          >
+            <Download size={15} aria-hidden="true" />
+            Exportar respaldo
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="backup-actions-item"
+            onClick={() => closeAfter(onImport)}
+          >
+            <Upload size={15} aria-hidden="true" />
+            Importar respaldo
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -446,6 +446,58 @@ html.phase-transition::view-transition-new(root) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Toast — transient backup feedback (success/error). Fixed bottom-center, */
+/* above every surface including modals, with the app's slide/fade      */
+/* entrance and the design tokens (paper-raised, ink, radius, shadow).  */
+/* ------------------------------------------------------------------ */
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.toast {
+  position: fixed;
+  bottom: 1.2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: min(92vw, 30rem);
+  padding: 0.65rem 0.7rem 0.65rem 0.95rem;
+  background: var(--paper-raised);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--ink-faint);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  font-weight: 600;
+  font-size: 0.9rem;
+  animation: toast-in 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.toast-success {
+  border-left-color: var(--green);
+}
+
+.toast-error {
+  border-left-color: var(--red);
+  color: var(--red-deep);
+}
+
+.toast-dismiss {
+  flex-shrink: 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* Icon buttons — the world's ink controls.                            */
 /* ------------------------------------------------------------------ */
 
@@ -523,7 +575,54 @@ html.phase-transition::view-transition-new(root) {
 .vault-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 0.5rem;
+  /* The backup actions join the header controls; allow wrapping so narrow
+     windows never clip the new buttons. */
+  flex-wrap: wrap;
+}
+
+/* Backup actions dropdown (user correction, post-verify): the Download
+   trigger sits next to the lock button and opens a right-aligned menu below
+   it, styled with the same design tokens as .action-button (paper-raised,
+   ink, ink-faint border, radius, blue hover). */
+.backup-actions {
+  position: relative;
+  display: inline-flex;
+}
+
+.backup-actions-menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  z-index: 20;
+  min-width: 12.5rem;
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  border-top: 3px double var(--ink);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 0.35rem;
+  animation: breathe-in 0.25s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.backup-actions-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.45rem 0.6rem;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--ink);
+  font-size: 0.88rem;
+}
+
+.backup-actions-item:hover {
+  background: var(--paper-deep);
+  color: var(--blue-deep);
 }
 
 /* The secondary header action (e.g. "Administrar categorías") keeps the

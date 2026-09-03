@@ -14,6 +14,10 @@ import {
   MaskedPassword,
   SearchFilters,
   CategoryAdminModal,
+  ImportConfirmModal,
+  Toast,
+  TOAST_DURATION_MS,
+  BackupActionsMenu,
 } from "./components";
 
 const SUMMARY: EntrySummary = {
@@ -587,6 +591,124 @@ describe("CategoryAdminModal — administration controls", () => {
   it("shows the entry count next to an in-use category row", () => {
     renderAdmin({ usage: { trabajo: 3, estudio: 0 } });
     expect(screen.getByText("3 entradas")).toBeTruthy();
+  });
+});
+
+describe("ImportConfirmModal — Spanish replacement confirmation", () => {
+  it("explains the replacement and offers Cancel/Confirm in Spanish", () => {
+    render(<ImportConfirmModal onConfirm={() => undefined} onCancel={() => undefined} />);
+    const dialog = screen.getByRole("alertdialog", { name: "Confirmar importación" });
+    expect(within(dialog).getByText(/Se reemplazará la bóveda actual/)).toBeTruthy();
+    expect(within(dialog).getByText("Esta acción no se puede deshacer.")).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Importar" })).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Cancelar" })).toBeTruthy();
+  });
+
+  it("calls onConfirm from the Importar action and onCancel from Cancelar", () => {
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    render(<ImportConfirmModal onConfirm={onConfirm} onCancel={onCancel} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Importar" }));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Toast — transient backup feedback", () => {
+  it("renders success feedback as a polite status with a dismiss button", () => {
+    render(
+      <Toast
+        kind="success"
+        message="Respaldo exportado correctamente."
+        onDismiss={() => undefined}
+      />,
+    );
+    const toast = screen.getByRole("status");
+    expect(toast.textContent).toContain("Respaldo exportado correctamente.");
+    expect(toast.getAttribute("aria-live")).toBe("polite");
+    expect(screen.getByRole("button", { name: "Cerrar notificación" })).toBeTruthy();
+  });
+
+  it("renders error feedback as an assertive alert", () => {
+    render(<Toast kind="error" message="No se pudo importar la bóveda." onDismiss={() => undefined} />);
+    const toast = screen.getByRole("alert");
+    expect(toast.textContent).toContain("No se pudo importar la bóveda.");
+    expect(toast.getAttribute("aria-live")).toBe("assertive");
+  });
+
+  it("auto-dismisses after the toast duration", () => {
+    vi.useFakeTimers();
+    const onDismiss = vi.fn();
+    render(<Toast kind="success" message="Listo." onDismiss={onDismiss} />);
+    expect(screen.getByRole("status")).toBeTruthy();
+
+    act(() => {
+      vi.advanceTimersByTime(TOAST_DURATION_MS);
+    });
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("dismisses manually from the close button", () => {
+    const onDismiss = vi.fn();
+    render(<Toast kind="error" message="Ocurrió un error." onDismiss={onDismiss} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Cerrar notificación" }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("BackupActionsMenu — header dropdown", () => {
+  it("opens the menu from the download trigger with both backup actions", () => {
+    render(<BackupActionsMenu onExport={() => undefined} onImport={() => undefined} />);
+    const trigger = screen.getByRole("button", { name: "Acciones de respaldo" });
+    expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("menuitem", { name: "Exportar respaldo" })).toBeNull();
+
+    fireEvent.click(trigger);
+
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("menuitem", { name: "Exportar respaldo" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Importar respaldo" })).toBeTruthy();
+  });
+
+  it("calls onExport/onImport and closes after selecting an item", () => {
+    const onExport = vi.fn();
+    const onImport = vi.fn();
+    render(<BackupActionsMenu onExport={onExport} onImport={onImport} />);
+    fireEvent.click(screen.getByRole("button", { name: "Acciones de respaldo" }));
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Exportar respaldo" }));
+    expect(onExport).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Acciones de respaldo" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Importar respaldo" }));
+    expect(onImport).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("closes on outside click", () => {
+    render(<BackupActionsMenu onExport={() => undefined} onImport={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "Acciones de respaldo" }));
+    expect(screen.getByRole("menu")).toBeTruthy();
+
+    fireEvent.mouseDown(document.body);
+
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("closes on Escape", () => {
+    render(<BackupActionsMenu onExport={() => undefined} onImport={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "Acciones de respaldo" }));
+    expect(screen.getByRole("menu")).toBeTruthy();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 });
 

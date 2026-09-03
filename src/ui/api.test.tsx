@@ -4,15 +4,21 @@
 // normalize into typed CommandError values.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
+import { save, open } from "@tauri-apps/plugin-dialog";
 import { api, toCommandError, CATEGORY_PALETTE } from "./api";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ save: vi.fn(), open: vi.fn() }));
 
 const mockedInvoke = vi.mocked(invoke);
+const mockedSave = vi.mocked(save);
+const mockedOpen = vi.mocked(open);
 
 describe("api — command wiring", () => {
   beforeEach(() => {
     mockedInvoke.mockReset();
+    mockedSave.mockReset();
+    mockedOpen.mockReset();
   });
 
   it("createVault invokes create_vault with the master password in the req DTO", async () => {
@@ -98,10 +104,10 @@ describe("api — command wiring", () => {
     expect(mockedInvoke).toHaveBeenCalledWith("delete", { id: "id-1" });
   });
 
-  it("export invokes export with the destination path", async () => {
+  it("export invokes export_vault with the destination path (replaced the sync export command)", async () => {
     mockedInvoke.mockResolvedValue(undefined);
     await api.export("/tmp/backup.db");
-    expect(mockedInvoke).toHaveBeenCalledWith("export", { path: "/tmp/backup.db" });
+    expect(mockedInvoke).toHaveBeenCalledWith("export_vault", { dest: "/tmp/backup.db" });
   });
 
   it("copyField invokes copy_field with the snake_case field variant", async () => {
@@ -182,6 +188,67 @@ describe("api — command wiring", () => {
   });
 });
 
+describe("api — native dialog wrappers (vault-backup / vault-import)", () => {
+  it("chooseExportPath opens the save dialog with the timestamped default filename", async () => {
+    mockedSave.mockResolvedValue("/tmp/clavemaestra-backup.db");
+    const path = await api.chooseExportPath();
+    expect(path).toBe("/tmp/clavemaestra-backup.db");
+    expect(mockedSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Exportar respaldo",
+        defaultPath: expect.stringMatching(
+          /^clavemaestra-backup-\d{4}-\d{2}-\d{2}-\d{4}\.db$/,
+        ),
+        filters: [{ name: "Base de datos", extensions: ["db"] }],
+      }),
+    );
+  });
+
+  it("chooseExportPath resolves null when the save dialog is cancelled", async () => {
+    mockedSave.mockResolvedValue(null);
+    expect(await api.chooseExportPath()).toBeNull();
+  });
+
+  it("chooseImportPath opens the open dialog for a single backup file", async () => {
+    mockedOpen.mockResolvedValue("/home/user/backup.db");
+    const path = await api.chooseImportPath();
+    expect(path).toBe("/home/user/backup.db");
+    expect(mockedOpen).toHaveBeenCalledWith({
+      title: "Seleccionar respaldo",
+      multiple: false,
+      directory: false,
+      filters: [{ name: "Base de datos", extensions: ["db"] }],
+    });
+  });
+
+  it("chooseImportPath resolves null when the open dialog is cancelled", async () => {
+    mockedOpen.mockResolvedValue(null);
+    expect(await api.chooseImportPath()).toBeNull();
+  });
+});
+
+describe("api — vault import wiring (vault-import spec)", () => {
+  it("importVault previews with confirmed=false and returns the tagged confirmation result", async () => {
+    mockedInvoke.mockResolvedValue({ status: "confirmation_required" });
+    const result = await api.importVault("/home/user/backup.db", false);
+    expect(result).toEqual({ status: "confirmation_required" });
+    expect(mockedInvoke).toHaveBeenCalledWith("import_vault", {
+      path: "/home/user/backup.db",
+      confirmed: false,
+    });
+  });
+
+  it("importVault confirms with confirmed=true and returns the applied result", async () => {
+    mockedInvoke.mockResolvedValue({ status: "applied" });
+    const result = await api.importVault("/home/user/backup.db", true);
+    expect(result).toEqual({ status: "applied" });
+    expect(mockedInvoke).toHaveBeenCalledWith("import_vault", {
+      path: "/home/user/backup.db",
+      confirmed: true,
+    });
+  });
+});
+
 describe("toCommandError — rejection normalization", () => {
   it("maps unit-variant strings to typed kinds", () => {
     expect(toCommandError("Locked")).toEqual({ kind: "Locked" });
@@ -197,6 +264,7 @@ describe("toCommandError — rejection normalization", () => {
     expect(toCommandError("CategoryNotFound")).toEqual({ kind: "CategoryNotFound" });
     expect(toCommandError("NotFound")).toEqual({ kind: "NotFound" });
     expect(toCommandError("InvalidField")).toEqual({ kind: "InvalidField" });
+    expect(toCommandError("Import")).toEqual({ kind: "Import" });
   });
 
   it("maps the Backoff struct variant and keeps its seconds", () => {
