@@ -8,7 +8,8 @@ Define vault creation, authentication, locking, secret lifetime, inactivity, and
 
 ### Requirement: Authenticated login
 
-Login MUST succeed only after successful AEAD decryption of vault validation data with the Argon2id-derived key. The master password MUST NEVER be stored. Derived keys and plaintext secrets MUST remain owned by the Rust core and MAY be exposed to the frontend only as decrypted DTOs through Tauri commands; the key MUST NOT reach the frontend.
+Login MUST succeed only after successful AEAD decryption of vault validation data with the Argon2id-derived key. The master password MUST NEVER be stored. Derived keys and plaintext secrets MUST remain owned by the Rust core and MAY be exposed to the frontend only as decrypted DTOs through Tauri commands; the key MUST NOT reach the frontend. After an import, login MUST validate the master password belonging to the imported vault.
+(Previously: login authenticated only the vault that was active before any restore operation.)
 
 #### Scenario: Correct master password
 
@@ -24,9 +25,16 @@ Login MUST succeed only after successful AEAD decryption of vault validation dat
 - THEN validation decryption fails and login is rejected
 - AND the master password and derived key are not returned or stored
 
+#### Scenario: Reauthenticate imported vault
+
+- GIVEN an imported initialized vault and its prior session has been invalidated
+- WHEN the imported vault's master password is submitted
+- THEN login succeeds only for that password and unlocks the imported vault
+
 ### Requirement: Lock clears secrets
 
-Lock and logout MUST zeroize derived keys and plaintext secrets held by the Rust core. The inactivity timeout MUST be configurable in code. Secret-bearing values MUST NOT be exposed through Debug or formatting output.
+Lock, logout, and completion of vault import MUST zeroize derived keys and plaintext secrets held by the Rust core. The inactivity timeout MUST be configurable in code. Secret-bearing values MUST NOT be exposed through Debug or formatting output.
+(Previously: only explicit logout and inactivity lock triggered the secret-clearing behavior.)
 
 #### Scenario: Explicit logout
 
@@ -39,6 +47,12 @@ Lock and logout MUST zeroize derived keys and plaintext secrets held by the Rust
 - GIVEN an unlocked vault with an inactivity timeout configured in code
 - WHEN inactivity reaches that timeout
 - THEN the vault locks and applies the same secret-clearing behavior as logout
+
+#### Scenario: Import invalidates session
+
+- GIVEN an unlocked vault and a confirmed successful import
+- WHEN replacement completes
+- THEN the prior session is invalidated, secrets are cleared, and the application is locked
 
 ### Requirement: Bounded login attempts
 
