@@ -139,6 +139,17 @@ export function useVaultCommands(deps: UseVaultCommandsDeps): UseVaultCommandsRe
     }, TOAST_DURATION_MS);
   }
 
+  /** A failed command either locked the session (lock the screen) or routes
+   *  its Spanish message to the given error sink. */
+  function onCommandFailure(raw: unknown, onError: (message: string) => void) {
+    const commandError = toCommandError(raw);
+    if (commandError.kind === "Locked") {
+      lockScreen();
+    } else {
+      onError(spanishMessage(commandError));
+    }
+  }
+
   /** Refresh the category map and its per-category entry counts. Categories
    *  and usage only change through the administration modal or entry saves,
    *  so this runs after unlock, after entry saves/deletes and after every
@@ -159,12 +170,7 @@ export function useVaultCommands(deps: UseVaultCommandsDeps): UseVaultCommandsRe
       }
       setUsage(next);
     } catch (raw) {
-      const commandError = toCommandError(raw);
-      if (commandError.kind === "Locked") {
-        lockScreen();
-      } else {
-        setError(spanishMessage(commandError));
-      }
+      onCommandFailure(raw, setError);
     }
   }
 
@@ -175,12 +181,7 @@ export function useVaultCommands(deps: UseVaultCommandsDeps): UseVaultCommandsRe
     try {
       setEmails(await api.listEmails());
     } catch (raw) {
-      const commandError = toCommandError(raw);
-      if (commandError.kind === "Locked") {
-        lockScreen();
-      } else {
-        setError(spanishMessage(commandError));
-      }
+      onCommandFailure(raw, setError);
     }
   }
 
@@ -194,12 +195,7 @@ export function useVaultCommands(deps: UseVaultCommandsDeps): UseVaultCommandsRe
       setPhase("unlocked");
       void loadEmails();
     } catch (raw) {
-      const commandError = toCommandError(raw);
-      if (commandError.kind === "Locked") {
-        lockScreen();
-      } else {
-        setError(spanishMessage(commandError));
-      }
+      onCommandFailure(raw, setError);
     }
   }
 
@@ -276,12 +272,7 @@ export function useVaultCommands(deps: UseVaultCommandsDeps): UseVaultCommandsRe
       await api.export(path);
       showToast("success", "Respaldo exportado correctamente.");
     } catch (raw) {
-      const commandError = toCommandError(raw);
-      if (commandError.kind === "Locked") {
-        lockScreen();
-      } else {
-        showToast("error", spanishMessage(commandError));
-      }
+      onCommandFailure(raw, (message) => showToast("error", message));
     }
   }
 
@@ -300,12 +291,7 @@ export function useVaultCommands(deps: UseVaultCommandsDeps): UseVaultCommandsRe
         setImportConfirm({ path });
       }
     } catch (raw) {
-      const commandError = toCommandError(raw);
-      if (commandError.kind === "Locked") {
-        lockScreen();
-      } else {
-        showToast("error", spanishMessage(commandError));
-      }
+      onCommandFailure(raw, (message) => showToast("error", message));
     }
   }
 
@@ -330,12 +316,7 @@ export function useVaultCommands(deps: UseVaultCommandsDeps): UseVaultCommandsRe
         );
       }
     } catch (raw) {
-      const commandError = toCommandError(raw);
-      if (commandError.kind === "Locked") {
-        lockScreen();
-      } else {
-        showToast("error", spanishMessage(commandError));
-      }
+      onCommandFailure(raw, (message) => showToast("error", message));
     }
   }
 
@@ -372,12 +353,7 @@ export function useVaultCommands(deps: UseVaultCommandsDeps): UseVaultCommandsRe
     try {
       await api.copyField(id, field);
     } catch (raw) {
-      const commandError = toCommandError(raw);
-      if (commandError.kind === "Locked") {
-        lockScreen();
-      } else {
-        setError(spanishMessage(commandError));
-      }
+      onCommandFailure(raw, setError);
     }
   }
 
@@ -397,12 +373,7 @@ export function useVaultCommands(deps: UseVaultCommandsDeps): UseVaultCommandsRe
       // The entry may have changed categories, so the usage counts refresh.
       void loadCategories();
     } catch (raw) {
-      const commandError = toCommandError(raw);
-      if (commandError.kind === "Locked") {
-        lockScreen();
-      } else {
-        setError(spanishMessage(commandError));
-      }
+      onCommandFailure(raw, setError);
     }
   }
 
