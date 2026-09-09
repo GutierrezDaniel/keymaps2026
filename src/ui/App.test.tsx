@@ -10,7 +10,7 @@ import { render, screen, fireEvent, within, waitFor, act } from "@testing-librar
 import { invoke } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import App from "./App";
-import { TOAST_DURATION_MS } from "./components";
+import { TOAST_DURATION_MS } from "./components/Toast";
 import type { EntrySummary, EntryDetails, CategoryDto } from "./api";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -104,6 +104,28 @@ async function openDetailsModal(): Promise<void> {
   await screen.findByRole("dialog", { name: "Formulario de entrada" });
 }
 
+/** Boot an unlocked vault and trigger an export failure toast (kind "error",
+ *  message "Ocurrió un error: disk full"). Extra invoke routes can be
+ *  supplied for the steps that follow the toast. */
+async function showExportErrorToast(
+  extraRoutes: Record<string, (args?: unknown) => unknown> = {},
+): Promise<void> {
+  mockedSave.mockResolvedValue("/tmp/backup.db");
+  mockRoutes({
+    list: () => [ENTRY],
+    list_categories: () => CATEGORIES,
+    export_vault: () => {
+      throw { Backup: "disk full" };
+    },
+    ...extraRoutes,
+  });
+  render(<App />);
+  await screen.findByRole("heading", { name: "Mi bóveda" });
+  fireEvent.click(screen.getByRole("button", { name: "Acciones de respaldo" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Exportar respaldo" }));
+  await screen.findByText("Ocurrió un error: disk full");
+}
+
 describe("App — boot resolution", () => {
   it("shows the vault with summary cards when boot list succeeds", async () => {
     bootUnlocked();
@@ -163,6 +185,34 @@ describe("App — login and backoff", () => {
     expect(await screen.findByText(/Demasiados intentos fallidos/)).toBeTruthy();
     expect(screen.getByText(/en 5 segundos/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Desbloquear" })).toHaveProperty("disabled", true);
+  });
+
+  it("re-enables the submit once the backoff countdown expires", async () => {
+    vi.useFakeTimers();
+    mockRoutes({
+      list: () => {
+        throw "Locked";
+      },
+      unlock: () => {
+        throw { Backoff: { seconds: 5 } };
+      },
+    });
+    render(<App />);
+    await flush();
+    fireEvent.change(screen.getByLabelText("Contraseña maestra"), {
+      target: { value: "wrong" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Desbloquear" }));
+    await flush();
+    expect(screen.getByText(/en 5 segundos/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Desbloquear" })).toHaveProperty("disabled", true);
+
+    // The countdown reaches zero and the expire callback clears the backoff.
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(screen.getByRole("button", { name: "Desbloquear" })).toHaveProperty("disabled", false);
+    expect(screen.queryByText(/Demasiados intentos fallidos/)).toBeNull();
   });
 
   it("unlocks with the correct password and shows the vault", async () => {
@@ -867,5 +917,250 @@ describe("App — unlocked vault interactions", () => {
 
     expect(await screen.findByLabelText("Contraseña maestra")).toBeTruthy();
     expect(screen.queryByText("GitHub")).toBeNull();
+  });
+});
+
+describe("App — boot error and cancellation", () => {
+  it("locks with a Spanish error banner when boot reports a transport failure", async () => {
+    mockRoutes({
+      list: () => {
+        throw { Store: "corrupt vault" };
+      },
+    });
+    render(<App />);
+
+    expect(await screen.findByText("Ocurrió un error: corrupt vault")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Desbloquear" })).toBeTruthy();
+  });
+
+  it("ignores a resolved boot when the app unmounts first", async () => {
+    let resolveList!: (value: EntrySummary[]) => void;
+    mockRoutes({
+      list: () =>
+        new Promise<EntrySummary[]>((resolve) => {
+          resolveList = resolve;
+        }),
+    });
+    const { unmount } = render(<App />);
+    unmount();
+
+    await act(async () => {
+      resolveList([ENTRY]);
+    });
+    expect(mockedInvoke).toHaveBeenCalledWith("list", { filters: null });
+  });
+
+  it("ignores a rejected boot when the app unmounts first", async () => {
+    let rejectList!: (reason: unknown) => void;
+    mockRoutes({
+      list: () =>
+        new Promise<EntrySummary[]>((_, reject) => {
+          rejectList = reject;
+        }),
+    });
+    const { unmount } = render(<App />);
+    unmount();
+
+    await act(async () => {
+      rejectList("Locked");
+    });
+    expect(mockedInvoke).toHaveBeenCalledWith("list", { filters: null });
+  });
+});
+
+describe("App — lock and error resilience", () => {
+  it("locks the screen even when the lock command fails", async () => {
+    mockRoutes({
+      list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
+      lock: () => {
+        throw new Error("boom");
+      },
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Bloquear" }));
+
+    expect(await screen.findByLabelText("Contraseña maestra")).toBeTruthy();
+    expect(screen.queryByText("GitHub")).toBeNull();
+  });
+
+  it("shows a Spanish error banner when a copy command fails without locking", async () => {
+    mockRoutes({
+      list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
+      get_entry_details: () => DETAILS,
+      copy_field: () => {
+        throw { Store: "clipboard denied" };
+      },
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+    await openDetailsModal();
+
+    fireEvent.click(screen.getByRole("button", { name: "Copiar contraseña" }));
+
+    expect(await screen.findByText("Ocurrió un error: clipboard denied")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Mi bóveda" })).toBeTruthy();
+  });
+});
+
+describe("App — delete and edit resilience", () => {
+  it("closes the details modal and refreshes when a delete reports NotFound", async () => {
+    mockRoutes({
+      list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
+      get_entry_details: () => DETAILS,
+      delete: () => {
+        throw "NotFound";
+      },
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+    await openDetailsModal();
+
+    fireEvent.click(screen.getByRole("button", { name: "Eliminar" }));
+    const confirmDialog = screen.getByRole("alertdialog");
+    fireEvent.click(within(confirmDialog).getByRole("button", { name: "Eliminar" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Formulario de entrada" })).toBeNull(),
+    );
+    expect(screen.getByText("GitHub")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Mi bóveda" })).toBeTruthy();
+  });
+
+  it("saves an edit through the update command", async () => {
+    mockRoutes({
+      list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
+      get_entry_details: () => DETAILS,
+      update: () => undefined,
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+    await openDetailsModal();
+
+    fireEvent.change(screen.getByLabelText(/Sitio/), { target: { value: "GitLab" } });
+    fireEvent.click(screen.getByRole("button", { name: "Guardar" }));
+
+    await waitFor(() =>
+      expect(mockedInvoke).toHaveBeenCalledWith("update", {
+        id: "id-1",
+        input: {
+          site: "GitLab",
+          link: "https://github.com",
+          password: "s3cr3t",
+          email: "ana@example.com",
+          username: "ana",
+          category: "trabajo",
+        },
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Formulario de entrada" })).toBeNull(),
+    );
+  });
+
+  it("filters the vault list when a category is selected in the dropdown", async () => {
+    mockRoutes({
+      list: (args) => {
+        const filters = (args as { filters?: { category?: string | null } } | undefined)
+          ?.filters;
+        if (filters?.category) return [];
+        return [ENTRY];
+      },
+      list_categories: () => CATEGORIES,
+      list_emails: () => [],
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Filtrar por categoría" }));
+    fireEvent.click(screen.getByRole("option", { name: "trabajo" }));
+
+    expect(mockedInvoke).toHaveBeenCalledWith("list", {
+      filters: { category: "trabajo" },
+    });
+    expect(
+      await screen.findByText(/No hay entradas que coincidan con la búsqueda/),
+    ).toBeTruthy();
+  });
+});
+
+describe("App — toast dismissal across phases", () => {
+  it("dismisses the toast manually in the unlocked vault", async () => {
+    await showExportErrorToast();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cerrar notificación" }));
+
+    expect(screen.queryByText("Ocurrió un error: disk full")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Mi bóveda" })).toBeTruthy();
+  });
+
+  it("keeps the toast across a relock and dismisses it from the locked screen", async () => {
+    await showExportErrorToast();
+
+    fireEvent.click(screen.getByRole("button", { name: "Bloquear" }));
+    await screen.findByLabelText("Contraseña maestra");
+    expect(screen.getByText("Ocurrió un error: disk full")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cerrar notificación" }));
+    expect(screen.queryByText("Ocurrió un error: disk full")).toBeNull();
+  });
+
+  it("shows the toast on the create screen after a failed unlock and dismisses it", async () => {
+    await showExportErrorToast({
+      unlock: () => {
+        throw "VaultNotInitialized";
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Bloquear" }));
+    await screen.findByLabelText("Contraseña maestra");
+    fireEvent.change(screen.getByLabelText("Contraseña maestra"), {
+      target: { value: "x" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Desbloquear" }));
+
+    await screen.findByLabelText("Nueva contraseña maestra");
+    // The toast survived the relock and the failed unlock onto the create screen.
+    expect(screen.getByText("Ocurrió un error: disk full")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cerrar notificación" }));
+    expect(screen.queryByText("Ocurrió un error: disk full")).toBeNull();
+  });
+});
+
+describe("App — modal dismissal", () => {
+  it("cancels the delete confirmation and keeps the entry", async () => {
+    mockRoutes({
+      list: () => [ENTRY],
+      list_categories: () => CATEGORIES,
+      get_entry_details: () => DETAILS,
+    });
+    render(<App />);
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+    await openDetailsModal();
+
+    fireEvent.click(screen.getByRole("button", { name: "Eliminar" }));
+    const confirmDialog = screen.getByRole("alertdialog");
+    fireEvent.click(within(confirmDialog).getByRole("button", { name: "Cancelar" }));
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Formulario de entrada" })).toBeTruthy();
+    expect(screen.getByText("GitHub")).toBeTruthy();
+  });
+
+  it("closes the category administration modal from its close button", async () => {
+    bootUnlocked();
+    await screen.findByRole("heading", { name: "Mi bóveda" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Administrar categorías" }));
+    expect(screen.getByRole("dialog", { name: "Administrar categorías" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cerrar" }));
+    expect(screen.queryByRole("dialog", { name: "Administrar categorías" })).toBeNull();
   });
 });

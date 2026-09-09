@@ -274,6 +274,14 @@ describe("toCommandError — rejection normalization", () => {
     });
   });
 
+  it("maps the bare Backoff string with zero seconds", () => {
+    expect(toCommandError("Backoff")).toEqual({ kind: "Backoff", seconds: 0 });
+  });
+
+  it("defaults a missing Backoff seconds to zero", () => {
+    expect(toCommandError({ Backoff: {} })).toEqual({ kind: "Backoff", seconds: 0 });
+  });
+
   it("maps transport variants to typed kinds with their message", () => {
     expect(toCommandError({ Store: "disk full" })).toEqual({
       kind: "Store",
@@ -283,6 +291,14 @@ describe("toCommandError — rejection normalization", () => {
       kind: "Crypto",
       message: "auth failed",
     });
+  });
+
+  it("maps an empty tagged payload to an empty message", () => {
+    expect(toCommandError({ Store: null })).toEqual({ kind: "Store", message: "" });
+  });
+
+  it("normalizes an unknown string into Unknown with the raw message", () => {
+    expect(toCommandError("Garbage")).toEqual({ kind: "Unknown", message: "Garbage" });
   });
 
   it("falls back to Unknown for anything else", () => {
