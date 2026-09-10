@@ -303,7 +303,7 @@ impl SqliteVaultRepository {
         //    files being renamed (renames over open files are not portable to
         //    Windows).
         self.checkpoint()?;
-        self.conn = Connection::open_in_memory().map_err(store_err)?;
+        self.close_active_connection()?;
 
         // 4. Swap: current -> rollback, stage -> current.
         fs::rename(&db_path, &rollback).map_err(io_err)?;
@@ -347,14 +347,32 @@ impl SqliteVaultRepository {
     ) -> Result<(), RepositoryError> {
         // Close any connection to the failed installation before touching the
         // files (removing/renaming open files is not portable to Windows).
-        self.conn = Connection::open_in_memory().map_err(store_err)?;
-        let _ = fs::remove_file(db_path);
+        self.close_active_connection()?;
+        if let Err(e) = fs::remove_file(db_path) {
+            if e.kind() != io::ErrorKind::NotFound {
+                return Err(io_err(e));
+            }
+        }
         match fs::rename(rollback, db_path) {
             Ok(()) => {
                 self.conn = Self::open_connection(db_path)?;
                 Err(cause)
             }
             Err(restore_err) => Err(io_err(restore_err)),
+        }
+    }
+
+    /// Close the file-backed connection before a filesystem operation. Keep
+    /// the connection if SQLite reports that it still has active statements.
+    fn close_active_connection(&mut self) -> Result<(), RepositoryError> {
+        let placeholder = Connection::open_in_memory().map_err(store_err)?;
+        let active = std::mem::replace(&mut self.conn, placeholder);
+        match active.close() {
+            Ok(()) => Ok(()),
+            Err((active, e)) => {
+                self.conn = active;
+                Err(store_err(e))
+            }
         }
     }
 
@@ -716,11 +734,13 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("vault.db");
         let mut repo = SqliteVaultRepository::open(&path).unwrap();
+        repo.checkpoint().unwrap();
         let original = fs::read(&path).unwrap();
 
         // Simulate the swap point: the current vault was renamed to rollback
         // and a broken installation sits at the vault path.
         let rollback = rollback_sibling(&path);
+        repo.close_active_connection().unwrap();
         fs::rename(&path, &rollback).unwrap();
         fs::write(&path, b"corrupt installation").unwrap();
 
