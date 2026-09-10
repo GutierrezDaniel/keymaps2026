@@ -1,0 +1,54 @@
+name: Bug report
+description: Report a reproducible problem in Clavemaestra
+title: "[Bug]: "
+labels:
+  - bug
+  - type:bug
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and its impact.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest reliable reproduction.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Describe what should have happened.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Add relevant safe logs, run URLs, or error messages. Remove secrets and private values.
+      render: text
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Provide the affected release, tag, or commit when known.
+    validations:
+      required: false
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Provide the operating system and architecture when relevant.
+    validations:
+      required: false
