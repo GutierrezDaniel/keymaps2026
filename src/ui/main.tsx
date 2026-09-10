@@ -4,6 +4,7 @@ import "@fontsource/libre-caslon-text/400.css";
 import "@fontsource/libre-caslon-text/700.css";
 import "@fontsource/ibm-plex-mono/400.css";
 import "@fontsource/ibm-plex-mono/500.css";
+import "./styles.css";
 import App from "./App";
 
 // Application entry: mounts the Spanish UI shell (login/creation screens,
