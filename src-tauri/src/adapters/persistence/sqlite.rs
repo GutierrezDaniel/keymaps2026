@@ -22,7 +22,7 @@
 //! - the connection is `!Sync` and never shared: every mutating operation runs
 //!   inside a private transaction, so PR 3 can wrap this adapter in a `Mutex`.
 
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -287,7 +287,11 @@ impl SqliteVaultRepository {
         //    stays on one filesystem and the imported bytes are durable before
         //    anything is replaced.
         fs::copy(source.as_ref(), &stage).map_err(|e| io_err_at("stage copy", e))?;
-        let staged = fs::File::open(&stage).map_err(|e| io_err_at("stage open", e))?;
+        let staged = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&stage)
+            .map_err(|e| io_err_at("stage open", e))?;
         staged
             .sync_all()
             .map_err(|e| io_err_at("stage sync", e))?;
