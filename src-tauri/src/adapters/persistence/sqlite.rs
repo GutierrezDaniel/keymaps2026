@@ -286,33 +286,39 @@ impl SqliteVaultRepository {
         // 1. Stage a fully synced copy beside the vault file: the final rename
         //    stays on one filesystem and the imported bytes are durable before
         //    anything is replaced.
-        fs::copy(source.as_ref(), &stage).map_err(io_err)?;
-        let staged = fs::File::open(&stage).map_err(io_err)?;
-        staged.sync_all().map_err(io_err)?;
+        fs::copy(source.as_ref(), &stage).map_err(|e| io_err_at("stage copy", e))?;
+        let staged = fs::File::open(&stage).map_err(|e| io_err_at("stage open", e))?;
+        staged
+            .sync_all()
+            .map_err(|e| io_err_at("stage sync", e))?;
         drop(staged);
 
         // 2. Revalidate the staged bytes before touching the vault (guards
         //    against the selected file changing between preview and confirm).
         if let Err(e) = Self::validate_backup(&stage) {
             let _ = fs::remove_file(&stage);
-            return Err(RepositoryError::Store(e.to_string()));
+            return Err(RepositoryError::Store(format!(
+                "stage validation: {e}"
+            )));
         }
 
         // 3. Checkpoint so every committed write lives in the main file, then
         //    close the active connection: no live connection may reference the
         //    files being renamed (renames over open files are not portable to
         //    Windows).
-        self.checkpoint()?;
-        self.close_active_connection()?;
+        self.checkpoint()
+            .map_err(|e| RepositoryError::Store(format!("checkpoint: {e}")))?;
+        self.close_active_connection()
+            .map_err(|e| RepositoryError::Store(format!("close connection: {e}")))?;
 
         // 4. Swap: current -> rollback, stage -> current.
-        fs::rename(&db_path, &rollback).map_err(io_err)?;
+        fs::rename(&db_path, &rollback).map_err(|e| io_err_at("rename current to rollback", e))?;
         if let Err(e) = fs::rename(&stage, &db_path) {
             let _ = fs::remove_file(&stage);
             return self.restore_after_failed_swap(
                 &db_path,
                 &rollback,
-                RepositoryError::Store(format!("could not install the imported vault: {e}")),
+                RepositoryError::Store(format!("rename stage into place: {e}")),
             );
         }
 
@@ -320,17 +326,23 @@ impl SqliteVaultRepository {
         //    rollback. Any failure restores the previous vault.
         let installed = match Self::open_connection(&db_path) {
             Ok(conn) => conn,
-            Err(e) => return self.restore_after_failed_swap(&db_path, &rollback, e),
+            Err(e) => {
+                return self.restore_after_failed_swap(
+                    &db_path,
+                    &rollback,
+                    RepositoryError::Store(format!("reopen installed vault: {e}")),
+                )
+            }
         };
         self.conn = installed;
         if !self.is_initialized().unwrap_or(false) {
             return self.restore_after_failed_swap(
                 &db_path,
                 &rollback,
-                RepositoryError::Store("installed vault failed verification".into()),
+                RepositoryError::Store("verify installed vault: not initialized".into()),
             );
         }
-        fs::remove_file(&rollback).map_err(io_err)?;
+        fs::remove_file(&rollback).map_err(|e| io_err_at("remove rollback", e))?;
         Ok(())
     }
 
@@ -652,6 +664,10 @@ fn io_err(e: io::Error) -> RepositoryError {
     RepositoryError::Store(e.to_string())
 }
 
+fn io_err_at(step: &str, e: io::Error) -> RepositoryError {
+    RepositoryError::Store(format!("{step}: {e}"))
+}
+
 /// Map a candidate open failure: a file that is not a database is simply not
 /// an initialized vault; anything else (missing file, permissions) is an open
 /// failure.
@@ -756,5 +772,40 @@ mod tests {
         // The repository is usable again and points at the restored file.
         assert_eq!(repo.db_path(), Some(path.as_path()));
         assert!(!repo.is_initialized().unwrap());
+    }
+
+    #[test]
+    fn replace_with_backup_reports_the_failing_wal_swap_stage() {
+        let dir = TempDir::new().unwrap();
+        let current_path = dir.path().join("current.db");
+        let source_path = dir.path().join("source.db");
+
+        let mut current = SqliteVaultRepository::open(&current_path).unwrap();
+        current
+            .init_vault(
+                vec![1; MIN_SALT_LEN],
+                &EncryptedField {
+                    nonce: vec![2; GCM_NONCE_LEN],
+                    ciphertext: vec![3; GCM_TAG_LEN],
+                },
+            )
+            .unwrap();
+
+        let source = SqliteVaultRepository::open(&source_path).unwrap();
+        source
+            .init_vault(
+                vec![4; MIN_SALT_LEN],
+                &EncryptedField {
+                    nonce: vec![5; GCM_NONCE_LEN],
+                    ciphertext: vec![6; GCM_TAG_LEN],
+                },
+            )
+            .unwrap();
+        source.checkpoint().unwrap();
+        drop(source);
+
+        current
+            .replace_with_backup(&source_path)
+            .unwrap_or_else(|error| panic!("WAL replacement failed: {error:?}"));
     }
 }
