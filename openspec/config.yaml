@@ -2,31 +2,51 @@
 schema: spec-driven
 
 context: |
-  Project: keymaps2026 — personal password manager (desktop app).
-  Status: greenfield. Repo contains only .gitignore and .atl/ (no source, no manifests).
-  Planned stack (user decision, not yet scaffolded): Tauri (Rust core + WebView),
-  SQLite storage, React + TypeScript frontend.
-  Architecture: hexagonal — Rust domain core, application services, adapters
-  (SQLite repository, Tauri command layer).
-  Testing: not yet configured; no test runner, linter, type checker, or formatter detected.
-  Conventions: conventional commits, no AI attribution in commits, generated artifacts in English.
+  Project: keymaps2026 (product "Clavemaestra") — personal offline password manager, Tauri v2 desktop app.
+  Stack: Rust 2021 hexagonal core (core/domain + core/ports + core/application; adapters: rusqlite SQLite,
+  Argon2id + AES-256-GCM crypto, arboard clipboard, Tauri command layer) plus a React 18 / TypeScript / Vite
+  frontend rooted at src/ui (Spanish UI copy).
+  Desktop shell is gated behind the `tauri-app` feature; headless `cargo test --lib` needs no webkit2gtk.
+  Testing: Vitest 4 + @testing-library/react (frontend) and cargo test (Rust unit + integration); no workspace-wide test command.
+  Conventions: conventional commits, no AI attribution, technical artifacts in English.
 
 testing:
   strict_tdd: false
-  detected: "2026-08-25"
-  status: "Unavailable — greenfield repo has no test runner, manifest, or CI."
-  reason: "No runner/config found; sdd-init no-runner fallback sets strict_tdd: false."
-  runner: null
-  layers:
-    unit: null
-    integration: null
-    e2e: null
-  coverage: null
-  quality:
-    linter: null
-    type_checker: null
-    formatter: null
-  note: "Re-run sdd-init after scaffolding (cargo init / create-tauri-app) to detect real capabilities."
+  detected: "2026-09-10"
+  status: "Configured — real unit + integration suites in both projects; no workspace-wide test command."
+  reason: "No explicit workspace-level test command covers every in-scope project (CI runs `npm test` and `cargo test --lib` as separate steps; no Makefile/turbo/workspace script). sdd-init fail-closed fallback sets strict_tdd: false."
+  workspace_test_command: null
+  projects:
+    - path: "."
+      stack: "React 18 + TypeScript 5.5 + Vite 8 (frontend rooted at src/ui)"
+      framework: "Vitest 4 + @testing-library/react"
+      test_commands:
+        - "npm test"
+      layers:
+        unit: "vitest"
+        integration: "@testing-library/react (jsdom)"
+        e2e: null
+      coverage: "npx vitest run --coverage (@vitest/coverage-v8; 100% lines/functions/branches/statements thresholds)"
+      quality:
+        linter: null
+        type_checker: "tsc (via npm run build)"
+        formatter: null
+    - path: "src-tauri"
+      stack: "Rust 2021 (Tauri v2 hexagonal core)"
+      framework: "cargo test"
+      test_commands:
+        - "cargo test --lib"
+        - "cargo test --test vault_repo"
+        - "cargo test --test vault_import"
+      layers:
+        unit: "cargo test --lib (in-module #[cfg(test)])"
+        integration: "cargo test (tests/*.rs + tempfile)"
+        e2e: null
+      coverage: null
+      quality:
+        linter: "cargo clippy (available; not enforced in CI)"
+        type_checker: "rustc"
+        formatter: "cargo fmt (available; no rustfmt config)"
 
 rules:
   proposal:
@@ -43,9 +63,12 @@ rules:
   apply:
     guidelines:
       - Follow existing code patterns
+    # No workspace-wide test command covers both projects; run the per-project
+    # commands listed under testing.projects. strict_tdd is false (no RED-GREEN-REFACTOR gate).
     tdd: false
     test_command: ""
   verify:
+    # Same constraint: run the project-specific commands from testing.projects.
     test_command: ""
     build_command: ""
     coverage_threshold: 0
