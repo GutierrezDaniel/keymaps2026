@@ -99,8 +99,16 @@ where
         input: &EntryInput,
     ) -> Result<(), ServiceError> {
         self.validate_category(&input.category)?;
-        // Read to confirm existence before overwriting.
-        self.repo.list(&Filters::new())?;
+        // Confirm the entry exists before overwriting: `save` upserts, so a
+        // missing id would otherwise be created silently.
+        if !self
+            .repo
+            .list(&Filters::new())?
+            .iter()
+            .any(|e| e.id == id)
+        {
+            return Err(ServiceError::NotFound);
+        }
         let encrypted = self.cipher.encrypt(&id, key, input.password.clone())?;
         let record = EntryRecord {
             id,
@@ -444,6 +452,18 @@ mod tests {
         let details = svc.get_entry_details(&rid, &key).unwrap();
         assert_eq!(details.summary.site, "github");
         assert_eq!(details.password.expose_secret(), "s3cret");
+    }
+
+    #[test]
+    fn update_of_missing_entry_is_not_found_and_writes_nothing() {
+        let svc = service();
+        let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
+        let err = svc
+            .update_entry(id(9), &key, &input("trabajo", "ghost", "p"))
+            .unwrap_err();
+        assert!(matches!(err, ServiceError::NotFound));
+        // `save` upserts, so a missing id would otherwise be created here.
+        assert!(svc.list_entries(&Filters::new()).unwrap().is_empty());
     }
 
     #[test]

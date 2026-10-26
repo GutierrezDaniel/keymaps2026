@@ -315,8 +315,22 @@ impl SqliteVaultRepository {
         self.close_active_connection()
             .map_err(|e| RepositoryError::Store(format!("close connection: {e}")))?;
 
-        // 4. Swap: current -> rollback, stage -> current.
-        fs::rename(&db_path, &rollback).map_err(|e| io_err_at("rename current to rollback", e))?;
+        // 4. Swap: current -> rollback, stage -> current. A stale rollback left
+        //    by an earlier cleanup failure must not block the rename: Windows
+        //    refuses to rename onto an existing target.
+        let _ = fs::remove_file(&rollback);
+        if let Err(e) = fs::rename(&db_path, &rollback) {
+            // The vault file itself is untouched, so reopen it: returning with
+            // the empty in-memory placeholder would leave every later read and
+            // write failing until the vault is reopened.
+            self.conn = Self::open_connection(&db_path).map_err(|reopen| {
+                RepositoryError::Store(format!(
+                    "rename current to rollback: {e}; reopen original: {reopen}"
+                ))
+            })?;
+            let _ = fs::remove_file(&stage);
+            return Err(io_err_at("rename current to rollback", e));
+        }
         if let Err(e) = fs::rename(&stage, &db_path) {
             let _ = fs::remove_file(&stage);
             return self.restore_after_failed_swap(
@@ -346,7 +360,10 @@ impl SqliteVaultRepository {
                 RepositoryError::Store("verify installed vault: not initialized".into()),
             );
         }
-        fs::remove_file(&rollback).map_err(|e| io_err_at("remove rollback", e))?;
+        // Rollback cleanup is best-effort: the new vault is installed and
+        // verified, so a leftover file must not turn a successful import into
+        // an error. The next swap removes it before renaming.
+        let _ = fs::remove_file(&rollback);
         Ok(())
     }
 
@@ -811,5 +828,48 @@ mod tests {
         current
             .replace_with_backup(&source_path)
             .unwrap_or_else(|error| panic!("WAL replacement failed: {error:?}"));
+    }
+
+    #[test]
+    fn replace_with_backup_tolerates_a_stale_rollback_file() {
+        let dir = TempDir::new().unwrap();
+        let current_path = dir.path().join("current.db");
+        let source_path = dir.path().join("source.db");
+
+        let mut current = SqliteVaultRepository::open(&current_path).unwrap();
+        current
+            .init_vault(
+                vec![1; MIN_SALT_LEN],
+                &EncryptedField {
+                    nonce: vec![2; GCM_NONCE_LEN],
+                    ciphertext: vec![3; GCM_TAG_LEN],
+                },
+            )
+            .unwrap();
+
+        let source = SqliteVaultRepository::open(&source_path).unwrap();
+        source
+            .init_vault(
+                vec![4; MIN_SALT_LEN],
+                &EncryptedField {
+                    nonce: vec![5; GCM_NONCE_LEN],
+                    ciphertext: vec![6; GCM_TAG_LEN],
+                },
+            )
+            .unwrap();
+        source.checkpoint().unwrap();
+        drop(source);
+
+        // An earlier import installed its vault but could not delete the
+        // rollback file. The next swap must still succeed (Windows refuses to
+        // rename onto an existing target) and must leave no stale file behind.
+        fs::write(rollback_sibling(&current_path), b"stale rollback").unwrap();
+
+        current
+            .replace_with_backup(&source_path)
+            .unwrap_or_else(|error| panic!("stale rollback broke the swap: {error:?}"));
+
+        assert!(!rollback_sibling(&current_path).exists());
+        assert!(current.is_initialized().unwrap());
     }
 }
