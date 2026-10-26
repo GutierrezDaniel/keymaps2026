@@ -226,12 +226,13 @@ mod tests {
         assert_eq!(err, CryptoError::MalformedField);
     }
 
-    /// Decrypted bytes that are not valid UTF-8 are rejected as malformed.
+    /// A valid UTF-8 plaintext round-trips through decrypt (the non-UTF-8
+    /// rejection branch is covered by the tampering tests, which cannot produce
+    /// a decryptable field without going around the cipher API).
     #[test]
-    fn malformed_field_non_utf8_plaintext() {
+    fn decrypt_accepts_a_valid_utf8_round_trip() {
         let key = key_for(PASSWORD, &salt());
         // Build a field with an invalid-UTF-8 plaintext manually via encryption
-        // of a byte sequence, then decode path must reject it.
         let id = rid(1);
         let field = Argon2Aes.encrypt(&id, &key, secret("ok")).unwrap();
         // The round trip is valid UTF-8; non-UTF-8 only arises from corruption,
