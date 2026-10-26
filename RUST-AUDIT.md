@@ -1,9 +1,13 @@
 # Rust codebase audit against `rust-engineering`
 
-> Status: F1, F2 and the rollback hazard folded into F1 are fixed on
-> `fix/vault-update-and-import-recovery`, covered by
-> `src-tauri/tests/f1_f2_verification.rs`. F26 was found while fixing F1 and is
-> still open. Everything else is open.
+> Status: F1–F4, F11 and F20–F26 are fixed. F5 is half done: `src/lib.rs` now
+> carries `#![forbid(unsafe_code)]`, while `#![warn(missing_docs)]` is deferred
+> (it surfaces 130 undocumented public items — its own change, not a nit).
+> F6–F10 and F12–F19 remain open.
+>
+> Fixed in PR #30 (`fix/vault-update-and-import-recovery`: F1, F2, the rollback
+> hazard folded into F1, plus `tests/f1_f2_verification.rs`) and on
+> `fix/vault-audit-integrity` (F3, F4, F5 partial, F11, F20–F26).
 
 Scope: every Rust source file in `src-tauri/` — 25 files, 5,587 lines
 (`src/`: 4,729 · `tests/`: 858).
@@ -104,8 +108,8 @@ Neither defect is a crash. Both are silent: they produce a wrong state and keep 
 |---|---|
 | 2 — dependencies point inward | `domain/entry.rs` imports only `secrecy`; `ports/*` only `std`, `secrecy`, `thiserror`, `core::domain`; `application/*` only `std::path`, `thiserror`, `core::*`. No `rusqlite`, `tauri`, `fs` or `env` in the core. Adapters map `rusqlite`/`arboard`/`argon2` errors into core port errors. |
 | 3 — no `.await` with a lock | Zero `async` in the crate; locks are synchronous only. `export_vault`/`import_vault` use `spawn_blocking`. |
-| 4 — unsafe | Production: exactly one block (F4). Total in crate: 4 lines, the rest in tests (F20). |
-| 5 — deterministic tests | Integration tests use `tempfile::TempDir` outside the worktree, in-memory SQLite, no network, no retries. Two exceptions: F19 (sleeps) and F21/F22 (misnamed). |
+| 4 — unsafe | Zero `unsafe` in the crate (F4 and F20 fixed), enforced structurally by `#![forbid(unsafe_code)]`. |
+| 5 — deterministic tests | Integration tests use `tempfile::TempDir` outside the worktree, in-memory SQLite, no network, no retries. One exception: F19 (sleeps), open; F21/F22 (misnamed) are fixed. |
 | 6 — no `#[allow]` | Zero `#[allow]` in the crate. |
 | 7 — no secret logging | Zero logging at all (that is F9); no secret ever reaches an error variant, and `Debug` masking is asserted at `tauri.rs:1569-1613`. |
 | 8 — config | No `env::var`, no global mutable state; `main.rs` → `desktop::run` is a thin composition root; constants are documented. |
