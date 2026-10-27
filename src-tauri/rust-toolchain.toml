@@ -1,0 +1,6 @@
+# Pinned so `cargo fmt --check` and `clippy -D warnings` cannot start failing on
+# a toolchain upgrade nobody reviewed. Bump this deliberately, together with any
+# fixes the new lints require.
+[toolchain]
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]

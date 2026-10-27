@@ -68,11 +68,17 @@ jobs:
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev \
             librsvg2-dev \
-            patchelf
+            libdbus-1-dev \
+            patchelf \
+            build-essential \
+            pkg-config
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          # Must match src-tauri/rust-toolchain.toml: a floating stable would let
+          # a new rustfmt or lint break the gate without any code change.
+          toolchain: 1.98.0
           components: rustfmt, clippy
 
       - name: Cache Rust build
@@ -104,6 +110,11 @@ jobs:
     # failing an unrelated pull request on a newly published advisory.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
+    # Its own group: the weekly run shares refs/heads/main with ordinary pushes,
+    # and cancel-in-progress would otherwise drop it.
+    concurrency:
+      group: audit-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - name: Checkout
         uses: actions/checkout@v4
