@@ -12,6 +12,7 @@
 //! trail is only visible when the app is started from a console. A file sink
 //! with size-capped rotation is the upgrade path when that matters.
 
+#[cfg(not(test))]
 use std::io::Write;
 
 /// Why an import was refused. Mirrors the adapter's coarse error classes and
@@ -24,6 +25,17 @@ pub enum ImportRejection {
     StorageFailure,
 }
 
+/// Why the session was locked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockReason {
+    /// Explicit user action.
+    User,
+    /// The inactivity timeout fired.
+    Idle,
+    /// An applied vault import replaced the vault the session was unlocked for.
+    Import,
+}
+
 /// Operational events the backend can emit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event {
@@ -33,8 +45,9 @@ pub enum Event {
     UnlockBackoff {
         seconds: u64,
     },
-    SessionLocked,
-    AutoLocked,
+    SessionLocked {
+        reason: LockReason,
+    },
     ImportRejected {
         reason: ImportRejection,
     },
@@ -57,8 +70,14 @@ impl Event {
             Event::UnlockBackoff { seconds } => {
                 format!(r#"{{"event":"unlock_backoff","seconds":{seconds}}}"#)
             }
-            Event::SessionLocked => r#"{"event":"session_locked","reason":"user"}"#.to_string(),
-            Event::AutoLocked => r#"{"event":"session_locked","reason":"idle"}"#.to_string(),
+            Event::SessionLocked { reason } => {
+                let reason = match reason {
+                    LockReason::User => "user",
+                    LockReason::Idle => "idle",
+                    LockReason::Import => "import",
+                };
+                format!(r#"{{"event":"session_locked","reason":"{reason}"}}"#)
+            }
             Event::ImportRejected { reason } => {
                 let reason = match reason {
                     ImportRejection::InvalidCandidate => "invalid_candidate",
@@ -79,9 +98,27 @@ impl Event {
 
     /// Write the event to stderr. A write failure is ignored on purpose:
     /// observability must never turn a working command into an error.
+    ///
+    /// Test builds record the event instead, so a unit test can assert the
+    /// exact trail a command produced rather than parsing stderr — a wrong
+    /// branch is otherwise invisible to the suite.
     pub fn emit(self) {
+        #[cfg(test)]
+        CAPTURED.with(|events| events.borrow_mut().push(self));
+        #[cfg(not(test))]
         let _ = writeln!(std::io::stderr(), "{}", self.render());
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static CAPTURED: std::cell::RefCell<Vec<Event>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Take the events emitted on this thread since the last call (test builds).
+#[cfg(test)]
+pub fn drain_captured() -> Vec<Event> {
+    CAPTURED.with(|events| std::mem::take(&mut *events.borrow_mut()))
 }
 
 #[cfg(test)]
@@ -95,8 +132,12 @@ mod tests {
             Event::UnlockSucceeded,
             Event::UnlockFailed,
             Event::UnlockBackoff { seconds: 8 },
-            Event::SessionLocked,
-            Event::AutoLocked,
+            Event::SessionLocked {
+                reason: LockReason::User,
+            },
+            Event::SessionLocked {
+                reason: LockReason::Idle,
+            },
             Event::ImportApplied,
         ] {
             let rendered = event.render();

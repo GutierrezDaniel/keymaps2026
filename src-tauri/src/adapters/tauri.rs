@@ -32,7 +32,7 @@ use zeroize::Zeroize;
 use crate::adapters::backup::{BackupError, BackupService};
 use crate::adapters::clipboard::{Clipboard, CLIPBOARD_EXPIRY};
 use crate::adapters::crypto::argon2_aes::Argon2Aes;
-use crate::adapters::observability::{Event, ImportRejection};
+use crate::adapters::observability::{Event, ImportRejection, LockReason};
 use crate::adapters::persistence::sqlite::SqliteVaultRepository;
 use crate::core::application::vault_import_service::{ImportResult, ImportServiceError, VaultImportService};
 use crate::core::application::vault_service::{ServiceError, UpdateCategoryResult, VaultService};
@@ -627,10 +627,16 @@ impl VaultApp {
 
     /// Lock immediately: the session is taken and zeroized (key cleared).
     pub fn lock(&self) {
+        self.lock_with(LockReason::User);
+    }
+
+    /// Lock and record why, so the trail can tell a user lock, an idle lock and
+    /// an import relock apart.
+    fn lock_with(&self, reason: LockReason) {
         let mut guard = self.session.lock().unwrap();
         if let Some(mut session) = guard.take() {
             session.zeroize();
-            Event::SessionLocked.emit();
+            Event::SessionLocked { reason }.emit();
         }
     }
 
@@ -651,7 +657,10 @@ impl VaultApp {
         if expired {
             if let Some(mut session) = guard.take() {
                 session.zeroize();
-                Event::AutoLocked.emit();
+                Event::SessionLocked {
+                    reason: LockReason::Idle,
+                }
+                .emit();
             }
         }
         expired
@@ -776,7 +785,7 @@ impl VaultApp {
                 let reason = if is_validation_failure(&error) {
                     ImportRejection::InvalidCandidate
                 } else {
-                    self.lock();
+                    self.lock_with(LockReason::Import);
                     ImportRejection::StorageFailure
                 };
                 Event::ImportRejected { reason }.emit();
@@ -784,7 +793,7 @@ impl VaultApp {
             }
         };
         if result == ImportResult::Applied {
-            self.lock();
+            self.lock_with(LockReason::Import);
             Event::ImportApplied.emit();
         }
         Ok(result)
@@ -1233,6 +1242,97 @@ mod tests {
         );
     }
 
+    // -- operational trail (RUST-AUDIT F9) ----------------------------------
+
+    #[test]
+    fn unlock_emits_failure_success_and_backoff_events() {
+        use crate::adapters::observability::drain_captured;
+
+        let app = app();
+        app.create_vault(secret(MASTER_PASSWORD)).unwrap();
+        drain_captured();
+
+        assert_eq!(
+            app.unlock(secret("wrong password")).unwrap_err(),
+            CommandError::AuthenticationFailed
+        );
+        assert_eq!(drain_captured(), vec![Event::UnlockFailed]);
+
+        app.unlock(secret(MASTER_PASSWORD)).unwrap();
+        assert_eq!(drain_captured(), vec![Event::UnlockSucceeded]);
+
+        app.lock();
+        assert_eq!(
+            drain_captured(),
+            vec![Event::SessionLocked {
+                reason: LockReason::User
+            }]
+        );
+    }
+
+    #[test]
+    fn auto_lock_emits_the_idle_reason() {
+        use crate::adapters::observability::drain_captured;
+
+        let app = unlocked_app();
+        {
+            let mut guard = app.session.lock().unwrap();
+            let session = guard.as_mut().unwrap();
+            session.touch_at(Instant::now() - SESSION_TIMEOUT - Duration::from_secs(1));
+        }
+        drain_captured();
+
+        assert!(app.check_auto_lock());
+        assert_eq!(
+            drain_captured(),
+            vec![Event::SessionLocked {
+                reason: LockReason::Idle
+            }]
+        );
+    }
+
+    #[test]
+    fn import_outcomes_emit_their_reason_and_relock_source() {
+        use crate::adapters::observability::drain_captured;
+
+        let dir = TempDir::new().unwrap();
+        let backup_dir = TempDir::new().unwrap();
+        let backup = seeded_export(&backup_dir);
+
+        let app = file_app(&dir);
+        app.create_vault(secret(MASTER_PASSWORD)).unwrap();
+        app.unlock(secret(MASTER_PASSWORD)).unwrap();
+
+        // A candidate that is not a vault never touched anything: no relock.
+        let bogus = dir.path().join("not-a-vault.db");
+        std::fs::write(&bogus, b"this is not a sqlite vault").unwrap();
+        drain_captured();
+        assert_eq!(
+            app.import_backup(&bogus, false).unwrap_err(),
+            CommandError::Import
+        );
+        assert_eq!(
+            drain_captured(),
+            vec![Event::ImportRejected {
+                reason: ImportRejection::InvalidCandidate
+            }]
+        );
+        assert!(!app.is_locked());
+
+        // An applied import replaces the unlocked vault, so it relocks first.
+        drain_captured();
+        app.import_backup(&backup, true).unwrap();
+        assert_eq!(
+            drain_captured(),
+            vec![
+                Event::SessionLocked {
+                    reason: LockReason::Import
+                },
+                Event::ImportApplied,
+            ]
+        );
+    }
+
     #[test]
     fn with_key_does_not_hold_the_session_lock_across_the_operation() {
         let app = unlocked_app();
@@ -1246,6 +1346,42 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    #[test]
+    fn lock_does_not_wait_for_an_in_flight_operation() {
+        use std::sync::mpsc;
+        use std::thread;
+
+        let app = std::sync::Arc::new(unlocked_app());
+        let worker_app = std::sync::Arc::clone(&app);
+        let (started, started_rx) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel::<()>();
+        let worker = thread::spawn(move || {
+            worker_app.with_key(|_| {
+                started.send(()).unwrap();
+                // Hold the operation open until the test has tried to lock.
+                release_rx.recv().unwrap();
+                Ok(())
+            })
+        });
+        started_rx.recv().unwrap();
+
+        let locker_app = std::sync::Arc::clone(&app);
+        let (locked, locked_rx) = mpsc::channel();
+        let locker = thread::spawn(move || {
+            locker_app.lock();
+            locked.send(()).unwrap();
+        });
+        locked_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("lock() must not wait for the in-flight operation");
+        assert!(app.is_locked());
+
+        release.send(()).unwrap();
+        worker.join().unwrap().unwrap();
+        locker.join().unwrap();
+        assert!(app.is_locked(), "a finished operation must not revive the session");
     }
 
     #[test]
