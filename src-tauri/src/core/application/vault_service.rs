@@ -455,12 +455,20 @@ use crate::core::domain::entry::{seed_categories, EncryptedField};
             plaintext: SecretString,
         ) -> Result<EncryptedField, CryptoError> {
             let key_byte = key.expose_secret()[0];
-            let mut ciphertext: Vec<u8> = plaintext
+            let body: Vec<u8> = plaintext
                 .expose_secret()
                 .bytes()
                 .map(|b| b ^ key_byte)
                 .collect();
-            ciphertext.extend(id.as_bytes()[..4].iter().map(|b| b ^ key_byte));
+            // Tag = checksum of the body plus the record id, so tampering with
+            // either is detected: a fake that accepts anything would hide a
+            // service that writes corrupted fields.
+            let checksum = body
+                .iter()
+                .fold(0u8, |acc, b| acc.wrapping_add(*b))
+                ^ id.as_bytes()[0];
+            let mut ciphertext = body;
+            ciphertext.extend([checksum ^ key_byte; 4]);
             Ok(EncryptedField {
                 nonce: id.as_bytes()[..12].to_vec(),
                 ciphertext,
@@ -478,7 +486,11 @@ use crate::core::domain::entry::{seed_categories, EncryptedField};
             }
             let key_byte = key.expose_secret()[0];
             let (body, tag) = field.ciphertext.split_at(field.ciphertext.len() - 4);
-            if tag != id.as_bytes()[..4].iter().map(|b| b ^ key_byte).collect::<Vec<_>>() {
+            let checksum = body
+                .iter()
+                .fold(0u8, |acc, b| acc.wrapping_add(*b))
+                ^ id.as_bytes()[0];
+            if tag != [checksum ^ key_byte; 4] {
                 return Err(CryptoError::AuthenticationFailed);
             }
             let text: String = body.iter().map(|b| (b ^ key_byte) as char).collect();
@@ -507,6 +519,24 @@ use crate::core::domain::entry::{seed_categories, EncryptedField};
             username: "user".to_string(),
             category: category.to_string(),
         }
+    }
+
+    #[test]
+    fn the_cipher_fake_refuses_a_tampered_field() {
+        // The fake must fail closed: a service that wrote a corrupted field has
+        // to surface a crypto error, not a wrong plaintext.
+        let key = key();
+        let rid = id(1);
+        let cipher = FakeCipher;
+        let mut field = cipher
+            .encrypt(&rid, &key, password("s3cret"))
+            .expect("encryption cannot fail");
+        field.ciphertext[0] ^= 0xff;
+
+        assert!(matches!(
+            cipher.decrypt(&rid, &key, &field).unwrap_err(),
+            CryptoError::AuthenticationFailed
+        ));
     }
 
     #[test]
