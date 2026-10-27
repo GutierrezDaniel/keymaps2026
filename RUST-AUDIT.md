@@ -1,9 +1,25 @@
 # Rust codebase audit against `rust-engineering`
 
-> Status: F1–F4, F11 and F20–F26 are fixed. F5 is half done: `src/lib.rs` now
-> carries `#![forbid(unsafe_code)]`, while `#![warn(missing_docs)]` is deferred
-> (it surfaces 130 undocumented public items — its own change, not a nit).
-> F6–F10 and F12–F19 remain open.
+> Status: F1–F4, F6, F7, F9, F11 and F20–F26 are fixed. F5 is half done:
+> `src/lib.rs` now carries `#![forbid(unsafe_code)]`, while
+> `#![warn(missing_docs)]` is deferred (it surfaces 130 undocumented public
+> items — its own change, not a nit). F8, F10 and F12–F19 remain open.
+>
+> F9 deviation: the trail is `adapters/observability.rs`, a closed event enum
+> rendered as one JSON line on stderr, instead of `tracing`. The crate needs no
+> spans, levels or filtering, and `tracing` without `tracing-subscriber` emits
+> nothing — that is a new dependency for the same bytes. Test builds record the
+> events in a thread-local sink, so the suite asserts the exact trail a command
+> produced (a wrong branch now fails; verified by mutating one). Known
+> limitation: a windowed Windows build has no attached stderr, so the trail is
+> only visible from a console; a size-capped file sink is the upgrade path.
+>
+> Two advisories were reported by independent verification and left open
+> because neither is caused by this candidate: `require_unlocked()` then
+> re-locking the session can panic if `lock()` lands between them (pre-existing,
+> unchanged window), and a failed import can leave the main database file
+> physically rewritten although the logical vault is intact (SQLite checkpoints
+> partially before reporting `busy`; pre-existing).
 >
 > Fixed in PR #30 (`fix/vault-update-and-import-recovery`: F1, F2, the rollback
 > hazard folded into F1, plus `tests/f1_f2_verification.rs`) and on

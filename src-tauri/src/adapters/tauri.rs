@@ -32,6 +32,7 @@ use zeroize::Zeroize;
 use crate::adapters::backup::{BackupError, BackupService};
 use crate::adapters::clipboard::{Clipboard, CLIPBOARD_EXPIRY};
 use crate::adapters::crypto::argon2_aes::Argon2Aes;
+use crate::adapters::observability::{Event, ImportRejection, LockReason};
 use crate::adapters::persistence::sqlite::SqliteVaultRepository;
 use crate::core::application::vault_import_service::{ImportResult, ImportServiceError, VaultImportService};
 use crate::core::application::vault_service::{ServiceError, UpdateCategoryResult, VaultService};
@@ -558,16 +559,24 @@ impl VaultApp {
     /// Initialize a fresh vault with `master_password`. Refused once the vault
     /// is already initialized; does NOT unlock (the user then unlocks).
     pub fn create_vault(&self, master_password: SecretString) -> Result<(), CommandError> {
-        let repo = self.repo.lock().unwrap();
-        if repo.is_initialized()? {
+        if self.repo.lock().unwrap().is_initialized()? {
             return Err(CommandError::AlreadyInitialized);
         }
+        // Argon2id is deliberately slow: derive and encrypt outside the
+        // repository lock so no other command waits on it.
         let salt = self.kdf.random_salt();
         let key = self.kdf.derive(master_password, &salt)?;
         let validation = self
             .cipher
             .encrypt(&VALIDATION_ID, &key, secret(VALIDATION_SECRET))?;
+        let repo = self.repo.lock().unwrap();
+        // Re-check under the lock: another command may have initialized the
+        // vault while the key was being derived.
+        if repo.is_initialized()? {
+            return Err(CommandError::AlreadyInitialized);
+        }
         repo.init_vault(salt, &validation)?;
+        Event::VaultCreated.emit();
         Ok(())
     }
 
@@ -582,6 +591,10 @@ impl VaultApp {
             let backoff = self.backoff.lock().unwrap();
             let delay = backoff.delay_before_next_attempt();
             if delay > Duration::ZERO {
+                Event::UnlockBackoff {
+                    seconds: delay.as_secs(),
+                }
+                .emit();
                 return Err(CommandError::Backoff {
                     seconds: delay.as_secs(),
                 });
@@ -601,10 +614,12 @@ impl VaultApp {
             Ok(_) => {
                 self.backoff.lock().unwrap().record_success();
                 *self.session.lock().unwrap() = Some(Session::new(key));
+                Event::UnlockSucceeded.emit();
                 Ok(())
             }
             Err(_) => {
                 self.backoff.lock().unwrap().record_failure();
+                Event::UnlockFailed.emit();
                 Err(CommandError::AuthenticationFailed)
             }
         }
@@ -612,9 +627,16 @@ impl VaultApp {
 
     /// Lock immediately: the session is taken and zeroized (key cleared).
     pub fn lock(&self) {
+        self.lock_with(LockReason::User);
+    }
+
+    /// Lock and record why, so the trail can tell a user lock, an idle lock and
+    /// an import relock apart.
+    fn lock_with(&self, reason: LockReason) {
         let mut guard = self.session.lock().unwrap();
         if let Some(mut session) = guard.take() {
             session.zeroize();
+            Event::SessionLocked { reason }.emit();
         }
     }
 
@@ -635,6 +657,10 @@ impl VaultApp {
         if expired {
             if let Some(mut session) = guard.take() {
                 session.zeroize();
+                Event::SessionLocked {
+                    reason: LockReason::Idle,
+                }
+                .emit();
             }
         }
         expired
@@ -756,14 +782,19 @@ impl VaultApp {
                 // untouched. Any other storage failure may already have closed
                 // or replaced the active connection, so relock instead of
                 // serving a vault the adapter no longer controls.
-                if !is_validation_failure(&error) {
-                    self.lock();
-                }
+                let reason = if is_validation_failure(&error) {
+                    ImportRejection::InvalidCandidate
+                } else {
+                    self.lock_with(LockReason::Import);
+                    ImportRejection::StorageFailure
+                };
+                Event::ImportRejected { reason }.emit();
                 return Err(error.into());
             }
         };
         if result == ImportResult::Applied {
-            self.lock();
+            self.lock_with(LockReason::Import);
+            Event::ImportApplied.emit();
         }
         Ok(result)
     }
@@ -814,9 +845,19 @@ impl VaultApp {
         f: impl FnOnce(&VaultKey) -> Result<T, CommandError>,
     ) -> Result<T, CommandError> {
         self.require_unlocked()?;
-        let guard = self.session.lock().unwrap();
-        let session = guard.as_ref().expect("require_unlocked guarantees a session");
-        f(&session.key)
+        // Copy the key out and release the session mutex before running the
+        // operation: the guard used to be held across the crypto/database work,
+        // which blocked auto-lock, activity updates and `lock()` for its whole
+        // duration. The copy is a zeroizing secret dropped when this returns.
+        let key = {
+            let guard = self.session.lock().unwrap();
+            guard
+                .as_ref()
+                .expect("require_unlocked guarantees a session")
+                .key
+                .clone()
+        };
+        f(&key)
     }
 }
 
@@ -881,16 +922,32 @@ fn spawn_auto_lock_thread(app: tauri::AppHandle) {
     });
 }
 
+/// Async so the deliberately slow Argon2id derivation never blocks the IPC
+/// thread (design "Blocking work"; RUST-AUDIT F7).
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn create_vault(state: tauri::State<'_, Arc<VaultApp>>, req: UnlockRequest) -> Result<(), CommandError> {
-    state.create_vault(req.master_password)
+async fn create_vault(
+    state: tauri::State<'_, Arc<VaultApp>>,
+    req: UnlockRequest,
+) -> Result<(), CommandError> {
+    let app = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || app.create_vault(req.master_password))
+        .await
+        .map_err(|_| CommandError::Store("create worker failed unexpectedly".into()))?
 }
 
+/// Async for the same reason as `create_vault`: Argon2id on the IPC thread
+/// would freeze the UI for the duration of every unlock attempt.
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn unlock(state: tauri::State<'_, Arc<VaultApp>>, req: UnlockRequest) -> Result<(), CommandError> {
-    state.unlock(req.master_password)
+async fn unlock(
+    state: tauri::State<'_, Arc<VaultApp>>,
+    req: UnlockRequest,
+) -> Result<(), CommandError> {
+    let app = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || app.unlock(req.master_password))
+        .await
+        .map_err(|_| CommandError::Store("unlock worker failed unexpectedly".into()))?
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1183,6 +1240,148 @@ mod tests {
             &[0u8; 32],
             "zeroized session key bytes must be all zero"
         );
+    }
+
+    // -- operational trail (RUST-AUDIT F9) ----------------------------------
+
+    #[test]
+    fn unlock_emits_failure_success_and_backoff_events() {
+        use crate::adapters::observability::drain_captured;
+
+        let app = app();
+        app.create_vault(secret(MASTER_PASSWORD)).unwrap();
+        drain_captured();
+
+        assert_eq!(
+            app.unlock(secret("wrong password")).unwrap_err(),
+            CommandError::AuthenticationFailed
+        );
+        assert_eq!(drain_captured(), vec![Event::UnlockFailed]);
+
+        app.unlock(secret(MASTER_PASSWORD)).unwrap();
+        assert_eq!(drain_captured(), vec![Event::UnlockSucceeded]);
+
+        app.lock();
+        assert_eq!(
+            drain_captured(),
+            vec![Event::SessionLocked {
+                reason: LockReason::User
+            }]
+        );
+    }
+
+    #[test]
+    fn auto_lock_emits_the_idle_reason() {
+        use crate::adapters::observability::drain_captured;
+
+        let app = unlocked_app();
+        {
+            let mut guard = app.session.lock().unwrap();
+            let session = guard.as_mut().unwrap();
+            session.touch_at(Instant::now() - SESSION_TIMEOUT - Duration::from_secs(1));
+        }
+        drain_captured();
+
+        assert!(app.check_auto_lock());
+        assert_eq!(
+            drain_captured(),
+            vec![Event::SessionLocked {
+                reason: LockReason::Idle
+            }]
+        );
+    }
+
+    #[test]
+    fn import_outcomes_emit_their_reason_and_relock_source() {
+        use crate::adapters::observability::drain_captured;
+
+        let dir = TempDir::new().unwrap();
+        let backup_dir = TempDir::new().unwrap();
+        let backup = seeded_export(&backup_dir);
+
+        let app = file_app(&dir);
+        app.create_vault(secret(MASTER_PASSWORD)).unwrap();
+        app.unlock(secret(MASTER_PASSWORD)).unwrap();
+
+        // A candidate that is not a vault never touched anything: no relock.
+        let bogus = dir.path().join("not-a-vault.db");
+        std::fs::write(&bogus, b"this is not a sqlite vault").unwrap();
+        drain_captured();
+        assert_eq!(
+            app.import_backup(&bogus, false).unwrap_err(),
+            CommandError::Import
+        );
+        assert_eq!(
+            drain_captured(),
+            vec![Event::ImportRejected {
+                reason: ImportRejection::InvalidCandidate
+            }]
+        );
+        assert!(!app.is_locked());
+
+        // An applied import replaces the unlocked vault, so it relocks first.
+        drain_captured();
+        app.import_backup(&backup, true).unwrap();
+        assert_eq!(
+            drain_captured(),
+            vec![
+                Event::SessionLocked {
+                    reason: LockReason::Import
+                },
+                Event::ImportApplied,
+            ]
+        );
+    }
+
+    #[test]
+    fn with_key_does_not_hold_the_session_lock_across_the_operation() {
+        let app = unlocked_app();
+        // Anything the operation does with the session (an activity touch, an
+        // auto-lock check) must not wait for the operation itself.
+        app.with_key(|_| {
+            assert!(
+                app.session.try_lock().is_ok(),
+                "the session lock must be free inside the operation"
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn lock_does_not_wait_for_an_in_flight_operation() {
+        use std::sync::mpsc;
+        use std::thread;
+
+        let app = std::sync::Arc::new(unlocked_app());
+        let worker_app = std::sync::Arc::clone(&app);
+        let (started, started_rx) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel::<()>();
+        let worker = thread::spawn(move || {
+            worker_app.with_key(|_| {
+                started.send(()).unwrap();
+                // Hold the operation open until the test has tried to lock.
+                release_rx.recv().unwrap();
+                Ok(())
+            })
+        });
+        started_rx.recv().unwrap();
+
+        let locker_app = std::sync::Arc::clone(&app);
+        let (locked, locked_rx) = mpsc::channel();
+        let locker = thread::spawn(move || {
+            locker_app.lock();
+            locked.send(()).unwrap();
+        });
+        locked_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("lock() must not wait for the in-flight operation");
+        assert!(app.is_locked());
+
+        release.send(()).unwrap();
+        worker.join().unwrap().unwrap();
+        locker.join().unwrap();
+        assert!(app.is_locked(), "a finished operation must not revive the session");
     }
 
     #[test]
