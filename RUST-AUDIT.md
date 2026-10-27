@@ -8,6 +8,11 @@
 > Fixed in PR #30 (`fix/vault-update-and-import-recovery`: F1, F2, the rollback
 > hazard folded into F1, plus `tests/f1_f2_verification.rs`) and on
 > `fix/vault-audit-integrity` (F3, F4, F5 partial, F11, F20–F26).
+>
+> F26 tradeoff: the command layer relocks on every import failure that is not a
+> candidate-validation failure, so a corrupt candidate costs one extra unlock
+> even though the active vault was never touched. Deliberate — the alternative
+> is trusting a storage error to mean "nothing was written".
 
 Scope: every Rust source file in `src-tauri/` — 25 files, 5,587 lines
 (`src/`: 4,729 · `tests/`: 858).

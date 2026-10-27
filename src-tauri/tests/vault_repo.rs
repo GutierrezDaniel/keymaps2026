@@ -203,6 +203,19 @@ fn site_search_treats_like_metacharacters_as_literals() {
     let hits = repo.list(&Filters::new().with_site("under_score")).unwrap();
     assert_eq!(hits.len(), 1, "literal '_' must not match any character");
     assert_eq!(hits[0].site, "under_score");
+
+    // A literal backslash is the ESCAPE character, so it must round-trip.
+    save(&repo, &key, rid(5), r"C:\Users\me", "e");
+    save(&repo, &key, rid(6), "C:/Users/me", "f");
+    let hits = repo.list(&Filters::new().with_site(r"C:\Users")).unwrap();
+    assert_eq!(hits.len(), 1, "a literal backslash must not escape");
+    assert_eq!(hits[0].site, r"C:\Users\me");
+    let hits = repo.list(&Filters::new().with_site("\\")).unwrap();
+    assert_eq!(hits.len(), 1, "a lone backslash must match only itself");
+
+    // Ordinary substring search is unchanged.
+    let hits = repo.list(&Filters::new().with_site("1000")).unwrap();
+    assert_eq!(hits.len(), 1);
 }
 
 #[test]

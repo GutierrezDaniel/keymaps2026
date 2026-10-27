@@ -232,12 +232,8 @@ mod tests {
     #[test]
     fn decrypt_accepts_a_valid_utf8_round_trip() {
         let key = key_for(PASSWORD, &salt());
-        // Build a field with an invalid-UTF-8 plaintext manually via encryption
         let id = rid(1);
         let field = Argon2Aes.encrypt(&id, &key, secret("ok")).unwrap();
-        // The round trip is valid UTF-8; non-UTF-8 only arises from corruption,
-        // which is already covered by tampering tests. This asserts the happy path
-        // does not reject valid data (guards the decoder).
         assert!(Argon2Aes.decrypt(&id, &key, &field).is_ok());
     }
 }
