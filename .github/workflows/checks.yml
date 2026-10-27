@@ -1,0 +1,121 @@
+name: Checks
+
+# Quality gates on every pull request and every push to main.
+#
+# The release workflow only ran `npm test` and `cargo test --lib`, so the whole
+# integration suite, formatting and lints were unenforced (RUST-AUDIT, "Not
+# covered / open questions"). This workflow runs them, plus a compile of the
+# `tauri-app` feature so the desktop shell is never merged blind.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly, so dependency advisories surface even without a push.
+    - cron: "0 6 * * 1"
+
+# A newer push on the same ref makes the previous run obsolete.
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  frontend:
+    name: Frontend (types + tests)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Type-check and build
+        run: npm run build
+
+      - name: Run frontend tests
+        run: npm test
+
+  rust:
+    name: Rust (fmt, clippy, tests)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The desktop shell needs the webkit/gtk stack; installing it here is what
+      # lets the `tauri-app` feature be compiled instead of assumed.
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Check formatting
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: Lint
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      # `cargo test` without `--lib`: the integration targets are the ones that
+      # caught every data-integrity defect in the audit.
+      - name: Run tests
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Compile the desktop shell
+        working-directory: src-tauri
+        run: cargo check --features tauri-app
+
+  audit:
+    name: Dependency advisories
+    # Advisory databases change without any push, so this runs weekly instead of
+    # failing an unrelated pull request on a newly published advisory.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Audit dependencies
+        working-directory: src-tauri
+        run: cargo audit

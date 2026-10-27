@@ -13,12 +13,12 @@
 > limitation: a windowed Windows build has no attached stderr, so the trail is
 > only visible from a console; a size-capped file sink is the upgrade path.
 >
-> Two advisories were reported by independent verification and left open
-> because neither is caused by this candidate: `require_unlocked()` then
-> re-locking the session can panic if `lock()` lands between them (pre-existing,
-> unchanged window), and a failed import can leave the main database file
+> One advisory from independent verification stays open because it is not
+> caused by any candidate: a failed import can leave the main database file
 > physically rewritten although the logical vault is intact (SQLite checkpoints
-> partially before reporting `busy`; pre-existing).
+> partially before reporting `busy`; pre-existing). The other — a panic window
+> between `require_unlocked()` and re-locking the session — is closed: the key is
+> taken in a single acquisition (`session_key`).
 >
 > Fixed in PR #30 (`fix/vault-update-and-import-recovery`: F1, F2, the rollback
 > hazard folded into F1, plus `tests/f1_f2_verification.rs`) and on
@@ -137,7 +137,7 @@ Neither defect is a crash. Both are silent: they produce a wrong state and keep 
 
 ## Not covered / open questions
 
-- CI runs `npm test` and `cargo test --lib` only (`.github/workflows/windows-release.yml`). No `cargo fmt --check`, no `clippy -D warnings`, no `cargo audit`, and no `cargo test --test …` step — the skill's quality gate is half-missing. That must be accepted deliberately or tracked as its own change.
+- ~~CI runs `npm test` and `cargo test --lib` only.~~ Closed: `.github/workflows/checks.yml` runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (all targets), `cargo check --features tauri-app`, and the frontend type-check plus tests on every PR and push to main; `cargo audit` runs weekly, because the advisory database changes without any push. The release workflow keeps its own gates.
 - The boundary in rule 2 is convention inside one crate, not a crate split; F14 already leaked and it compiled.
 - `tests/*.rs` reach into raw `rusqlite` on purpose (`vault_repo.rs:96-106,422-427`) to prove plaintext absence and schema version. Justified, not flagged.
 - Environment-dependent, not reproducible read-only: whether `wal_checkpoint(TRUNCATE)` can return busy here (F3), and the exact UB exposure of F20.
