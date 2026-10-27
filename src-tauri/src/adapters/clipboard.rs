@@ -87,8 +87,11 @@ impl ClipboardPort for Clipboard {
             let mut guard = inner.lock().unwrap();
             // Conditional clear: only wipe when the current clipboard content is
             // still the value we placed there.
+            // The clipboard content read back is the secret we placed there:
+            // compare it inside a zeroizing wrapper so the comparison does not
+            // leave a plaintext copy behind (RUST-AUDIT F10).
             let unchanged = match guard.get_text() {
-                Ok(current) => current == *copied,
+                Ok(current) => Zeroizing::new(current).as_str() == copied.as_str(),
                 Err(_) => false,
             };
             if unchanged {

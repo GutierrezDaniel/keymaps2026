@@ -219,6 +219,19 @@ fn site_search_treats_like_metacharacters_as_literals() {
 }
 
 #[test]
+fn get_returns_one_entry_by_id() {
+    let repo = SqliteVaultRepository::open_in_memory().unwrap();
+    let key = test_key();
+    save(&repo, &key, rid(1), "github", "gh-secret");
+    save(&repo, &key, rid(2), "gitlab", "gl-secret");
+
+    let found = repo.get(&rid(2)).unwrap().expect("stored entry must be found");
+    assert_eq!(found.id, rid(2));
+    assert_eq!(found.site, "gitlab");
+    assert!(repo.get(&rid(9)).unwrap().is_none(), "unknown id is None");
+}
+
+#[test]
 fn list_without_filters_is_empty_on_fresh_db() {
     let repo = SqliteVaultRepository::open_in_memory().unwrap();
     assert!(repo.list(&Filters::new()).unwrap().is_empty());

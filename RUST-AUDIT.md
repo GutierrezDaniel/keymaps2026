@@ -1,9 +1,9 @@
 # Rust codebase audit against `rust-engineering`
 
-> Status: F1–F4, F6, F7, F9, F11 and F20–F26 are fixed. F5 is half done:
+> Status: F1–F4, F6–F11, F17 and F20–F26 are fixed. F5 is half done:
 > `src/lib.rs` now carries `#![forbid(unsafe_code)]`, while
 > `#![warn(missing_docs)]` is deferred (it surfaces 130 undocumented public
-> items — its own change, not a nit). F8, F10 and F12–F19 remain open.
+> items — its own change, not a nit). F12–F16, F18 and F19 remain open.
 >
 > F9 deviation: the trail is `adapters/observability.rs`, a closed event enum
 > rendered as one JSON line on stderr, instead of `tracing`. The crate needs no

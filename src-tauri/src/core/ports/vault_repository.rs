@@ -20,6 +20,10 @@ pub trait VaultRepository {
     /// List entries matching `filters` (combined conjunctively).
     fn list(&self, filters: &Filters) -> Result<Vec<EntryRecord>, RepositoryError>;
 
+    /// Fetch one entry by its stable record ID, without scanning the vault.
+    /// Returns `Ok(None)` when no entry has that ID.
+    fn get(&self, id: &RecordId) -> Result<Option<EntryRecord>, RepositoryError>;
+
     /// List the distinct non-empty emails stored in the vault, ordered
     /// ascending. The complete set must come from the repository: the loaded
     /// entry list can be shrunk by an active filter, so deriving emails from

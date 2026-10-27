@@ -74,17 +74,27 @@ where
         &self,
         id: RecordId,
         key: &VaultKey,
-        input: &EntryInput,
+        input: EntryInput,
     ) -> Result<(), ServiceError> {
         self.validate_category(&input.category)?;
-        let encrypted = self.cipher.encrypt(&id, key, input.password.clone())?;
+        // Take the input by value so the secret and the metadata move into the
+        // record instead of being copied on the heap (RUST-AUDIT F17).
+        let EntryInput {
+            site,
+            link,
+            password,
+            email,
+            username,
+            category,
+        } = input;
+        let encrypted = self.cipher.encrypt(&id, key, password)?;
         let record = EntryRecord {
             id,
-            site: input.site.clone(),
-            link: input.link.clone(),
-            category: input.category.clone(),
-            email: input.email.clone(),
-            username: input.username.clone(),
+            site,
+            link,
+            category,
+            email,
+            username,
             password: encrypted,
         };
         self.repo.save(&record)?;
@@ -96,27 +106,31 @@ where
         &self,
         id: RecordId,
         key: &VaultKey,
-        input: &EntryInput,
+        input: EntryInput,
     ) -> Result<(), ServiceError> {
         self.validate_category(&input.category)?;
         // Confirm the entry exists before overwriting: `save` upserts, so a
-        // missing id would otherwise be created silently.
-        if !self
-            .repo
-            .list(&Filters::new())?
-            .iter()
-            .any(|e| e.id == id)
-        {
+        // missing id would otherwise be created silently. A primary-key lookup
+        // replaces the full-vault scan this used to need (RUST-AUDIT F8).
+        if self.repo.get(&id)?.is_none() {
             return Err(ServiceError::NotFound);
         }
-        let encrypted = self.cipher.encrypt(&id, key, input.password.clone())?;
+        let EntryInput {
+            site,
+            link,
+            password,
+            email,
+            username,
+            category,
+        } = input;
+        let encrypted = self.cipher.encrypt(&id, key, password)?;
         let record = EntryRecord {
             id,
-            site: input.site.clone(),
-            link: input.link.clone(),
-            category: input.category.clone(),
-            email: input.email.clone(),
-            username: input.username.clone(),
+            site,
+            link,
+            category,
+            email,
+            username,
             password: encrypted,
         };
         self.repo.save(&record)?;
@@ -129,44 +143,26 @@ where
         id: &RecordId,
         key: &VaultKey,
     ) -> Result<EntryDetails, ServiceError> {
-        let matches: Vec<EntryRecord> = self
-            .repo
-            .list(&Filters::new())?
-            .into_iter()
-            .filter(|e| &e.id == id)
-            .collect();
-        let record = matches
-            .into_iter()
-            .next()
-            .ok_or(ServiceError::NotFound)?;
+        // One primary-key lookup instead of loading and scanning the vault.
+        let record = self.repo.get(id)?.ok_or(ServiceError::NotFound)?;
         let password = self.cipher.decrypt(&record.id, key, &record.password)?;
         Ok(EntryDetails {
-            summary: EntrySummary {
-                id: record.id,
-                site: record.site,
-                link: record.link,
-                email: record.email,
-                username: record.username,
-                category: record.category,
-            },
+            summary: EntrySummary::from(record),
             password,
         })
+    }
+
+    /// Metadata-only view of one entry (no decryption), for the fields that can
+    /// be copied without touching the secret.
+    pub fn get_entry_summary(&self, id: &RecordId) -> Result<EntrySummary, ServiceError> {
+        let record = self.repo.get(id)?.ok_or(ServiceError::NotFound)?;
+        Ok(EntrySummary::from(record))
     }
 
     /// List metadata-only summaries matching `filters` (no decryption).
     pub fn list_entries(&self, filters: &Filters) -> Result<Vec<EntrySummary>, ServiceError> {
         let records = self.repo.list(filters)?;
-        Ok(records
-            .into_iter()
-            .map(|e| EntrySummary {
-                id: e.id,
-                site: e.site,
-                link: e.link,
-                email: e.email,
-                username: e.username,
-                category: e.category,
-            })
-            .collect())
+        Ok(records.into_iter().map(EntrySummary::from).collect())
     }
 
     /// Delete an entry by its stable record ID.
@@ -278,6 +274,8 @@ mod tests {
     struct FakeRepo {
         records: Mutex<Vec<EntryRecord>>,
         categories: Mutex<Vec<Category>>,
+        /// Number of `list` calls: a single-entry read must not scan the vault.
+        list_calls: std::sync::atomic::AtomicUsize,
     }
 
     impl FakeRepo {
@@ -285,12 +283,15 @@ mod tests {
             Self {
                 records: Mutex::new(Vec::new()),
                 categories: Mutex::new(seed_categories().to_vec()),
+                list_calls: std::sync::atomic::AtomicUsize::new(0),
             }
         }
     }
 
     impl VaultRepository for FakeRepo {
         fn list(&self, filters: &Filters) -> Result<Vec<EntryRecord>, RepositoryError> {
+            self.list_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let records = self.records.lock().unwrap();
             Ok(records
                 .iter()
@@ -313,6 +314,11 @@ mod tests {
                 })
                 .cloned()
                 .collect())
+        }
+
+        fn get(&self, id: &RecordId) -> Result<Option<EntryRecord>, RepositoryError> {
+            let records = self.records.lock().unwrap();
+            Ok(records.iter().find(|e| &e.id == id).cloned())
         }
 
         fn save(&self, entry: &EntryRecord) -> Result<(), RepositoryError> {
@@ -446,7 +452,7 @@ mod tests {
             .derive(password("hunter2"), &[7u8; 16])
             .unwrap();
         let rid = id(1);
-        svc.create_entry(rid, &key, &input("entretenimiento", "github", "s3cret"))
+        svc.create_entry(rid, &key, input("entretenimiento", "github", "s3cret"))
             .unwrap();
 
         let details = svc.get_entry_details(&rid, &key).unwrap();
@@ -459,11 +465,37 @@ mod tests {
         let svc = service();
         let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
         let err = svc
-            .update_entry(id(9), &key, &input("trabajo", "ghost", "p"))
+            .update_entry(id(9), &key, input("trabajo", "ghost", "p"))
             .unwrap_err();
         assert!(matches!(err, ServiceError::NotFound));
         // `save` upserts, so a missing id would otherwise be created here.
         assert!(svc.list_entries(&Filters::new()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn single_entry_reads_do_not_scan_the_vault() {
+        use std::sync::atomic::Ordering;
+
+        let svc = service();
+        let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
+        svc.create_entry(id(1), &key, input("trabajo", "github", "p"))
+            .unwrap();
+        svc.create_entry(id(2), &key, input("trabajo", "gitlab", "q"))
+            .unwrap();
+        let scans = svc.repo.list_calls.load(Ordering::SeqCst);
+
+        // Detail read, metadata read and the update existence check are all
+        // primary-key lookups: none of them may load the vault (F8).
+        svc.get_entry_details(&id(1), &key).unwrap();
+        svc.get_entry_summary(&id(1)).unwrap();
+        svc.update_entry(id(1), &key, input("trabajo", "github", "r"))
+            .unwrap();
+
+        assert_eq!(
+            svc.repo.list_calls.load(Ordering::SeqCst),
+            scans,
+            "single-entry operations must not list the vault"
+        );
     }
 
     #[test]
@@ -479,7 +511,7 @@ mod tests {
         let svc = service();
         let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
         let err = svc
-            .create_entry(id(2), &key, &input("custom-cat", "x", "y"))
+            .create_entry(id(2), &key, input("custom-cat", "x", "y"))
             .unwrap_err();
         assert!(matches!(err, ServiceError::UnknownCategory));
         // No-write: the rejected entry must not be persisted.
@@ -494,7 +526,7 @@ mod tests {
         // repository-backed custom category"), so entries may use it.
         svc.create_category(&Category::new("lectura", "#8a4f7d"))
             .unwrap();
-        svc.create_entry(id(6), &key, &input("lectura", "bookmarks", "p"))
+        svc.create_entry(id(6), &key, input("lectura", "bookmarks", "p"))
             .unwrap();
         let list = svc.list_entries(&Filters::new()).unwrap();
         assert_eq!(list.len(), 1);
@@ -505,9 +537,9 @@ mod tests {
     fn filters_combine_conjunctively() {
         let svc = service();
         let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
-        svc.create_entry(id(3), &key, &input("trabajo", "github", "a"))
+        svc.create_entry(id(3), &key, input("trabajo", "github", "a"))
             .unwrap();
-        svc.create_entry(id(4), &key, &input("estudio", "gitlab", "b"))
+        svc.create_entry(id(4), &key, input("estudio", "gitlab", "b"))
             .unwrap();
 
         let f = Filters::new().with_site("git");
@@ -523,7 +555,7 @@ mod tests {
     fn delete_removes_record() {
         let svc = service();
         let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
-        svc.create_entry(id(5), &key, &input("servicios", "site", "p"))
+        svc.create_entry(id(5), &key, input("servicios", "site", "p"))
             .unwrap();
         svc.delete_entry(&id(5)).unwrap();
         assert!(svc.list_entries(&Filters::new()).unwrap().is_empty());
@@ -597,7 +629,7 @@ mod tests {
         let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
         // Three entries reference `trabajo`.
         for n in 1..=3 {
-            svc.create_entry(id(n), &key, &input("trabajo", &format!("site{n}"), "p"))
+            svc.create_entry(id(n), &key, input("trabajo", &format!("site{n}"), "p"))
                 .unwrap();
         }
 
@@ -632,7 +664,7 @@ mod tests {
         let svc = service();
         let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
         for n in 1..=3 {
-            svc.create_entry(id(n), &key, &input("trabajo", &format!("site{n}"), "p"))
+            svc.create_entry(id(n), &key, input("trabajo", &format!("site{n}"), "p"))
                 .unwrap();
         }
 
@@ -666,7 +698,7 @@ mod tests {
         // In-use categories cannot be deleted.
         let svc = service();
         let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
-        svc.create_entry(id(7), &key, &input("trabajo", "github", "p"))
+        svc.create_entry(id(7), &key, input("trabajo", "github", "p"))
             .unwrap();
         assert!(matches!(
             svc.delete_category("trabajo").unwrap_err(),
