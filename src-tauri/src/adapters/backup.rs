@@ -63,7 +63,8 @@ impl BackupService {
         // interleave between the checkpoint and the file read.
         let repo = self.repo.lock().unwrap();
         let db_path = repo.db_path().ok_or(BackupError::NoVaultFile)?;
-        repo.checkpoint().map_err(|e| BackupError::Store(e.to_string()))?;
+        repo.checkpoint()
+            .map_err(|e| BackupError::Store(e.to_string()))?;
         let bytes = fs::read(db_path).map_err(io_err)?;
         atomic_write(dest, &bytes)
     }
@@ -151,7 +152,9 @@ mod tests {
             .unwrap();
         repo.init_vault(salt.clone(), &validation).unwrap();
 
-        let password = Argon2Aes.encrypt(&rid(1), &key, secret(SECRET_VALUE)).unwrap();
+        let password = Argon2Aes
+            .encrypt(&rid(1), &key, secret(SECRET_VALUE))
+            .unwrap();
         let entry = EntryRecord {
             id: rid(1),
             site: "github".into(),
@@ -243,7 +246,9 @@ mod tests {
         // Restore path: the key derived from the *exported* salt decrypts the
         // exported password field, proving the encrypted context is preserved.
         let key = Argon2Aes.derive(secret(MASTER_PASSWORD), &salt).unwrap();
-        let recovered = Argon2Aes.decrypt(&all[0].id, &key, &all[0].password).unwrap();
+        let recovered = Argon2Aes
+            .decrypt(&all[0].id, &key, &all[0].password)
+            .unwrap();
         assert_eq!(recovered.expose_secret(), SECRET_VALUE);
 
         // No plaintext password anywhere in the raw backup bytes.
@@ -270,7 +275,9 @@ mod tests {
         drop(source);
 
         let dest = dir.path().join("backup.db");
-        BackupService::new(repo).export(SessionGate::Unlocked, &dest).unwrap();
+        BackupService::new(repo)
+            .export(SessionGate::Unlocked, &dest)
+            .unwrap();
 
         let reopened = SqliteVaultRepository::open(&dest).unwrap();
         let exported: Vec<EncryptedField> = reopened
@@ -279,7 +286,10 @@ mod tests {
             .into_iter()
             .map(|e| e.password)
             .collect();
-        assert_eq!(original, exported, "exported ciphertext/nonce must match the source");
+        assert_eq!(
+            original, exported,
+            "exported ciphertext/nonce must match the source"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -304,6 +314,9 @@ mod tests {
         let reopened = SqliteVaultRepository::open(&dest).unwrap();
         assert!(reopened.is_initialized().unwrap());
         assert_eq!(reopened.list(&Filters::new()).unwrap().len(), 1);
-        assert!(!temp_sibling(&dest).exists(), "no temp file may remain after overwrite");
+        assert!(
+            !temp_sibling(&dest).exists(),
+            "no temp file may remain after overwrite"
+        );
     }
 }

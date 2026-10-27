@@ -266,7 +266,7 @@ mod tests {
 
     use super::*;
     use crate::core::application::gate::Confirmation;
-use crate::core::domain::entry::{seed_categories, EncryptedField};
+    use crate::core::domain::entry::{seed_categories, EncryptedField};
     use crate::core::ports::key_derivation::KeyDerivationPort;
 
     /// In-memory fake repository used to exercise the use cases without SQLite.
@@ -463,10 +463,7 @@ use crate::core::domain::entry::{seed_categories, EncryptedField};
             // Tag = checksum of the body plus the record id, so tampering with
             // either is detected: a fake that accepts anything would hide a
             // service that writes corrupted fields.
-            let checksum = body
-                .iter()
-                .fold(0u8, |acc, b| acc.wrapping_add(*b))
-                ^ id.as_bytes()[0];
+            let checksum = body.iter().fold(0u8, |acc, b| acc.wrapping_add(*b)) ^ id.as_bytes()[0];
             let mut ciphertext = body;
             ciphertext.extend([checksum ^ key_byte; 4]);
             Ok(EncryptedField {
@@ -486,10 +483,7 @@ use crate::core::domain::entry::{seed_categories, EncryptedField};
             }
             let key_byte = key.expose_secret()[0];
             let (body, tag) = field.ciphertext.split_at(field.ciphertext.len() - 4);
-            let checksum = body
-                .iter()
-                .fold(0u8, |acc, b| acc.wrapping_add(*b))
-                ^ id.as_bytes()[0];
+            let checksum = body.iter().fold(0u8, |acc, b| acc.wrapping_add(*b)) ^ id.as_bytes()[0];
             if tag != [checksum ^ key_byte; 4] {
                 return Err(CryptoError::AuthenticationFailed);
             }

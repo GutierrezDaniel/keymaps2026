@@ -55,8 +55,8 @@ impl CipherPort for Argon2Aes {
         key: &VaultKey,
         plaintext: SecretString,
     ) -> Result<EncryptedField, CryptoError> {
-        let cipher = Aes256Gcm::new_from_slice(key.expose_secret())
-            .map_err(|_| CryptoError::InvalidKey)?;
+        let cipher =
+            Aes256Gcm::new_from_slice(key.expose_secret()).map_err(|_| CryptoError::InvalidKey)?;
         let mut nonce = [0u8; NONCE_LEN];
         OsRng.fill_bytes(&mut nonce);
         let payload = Payload {
@@ -84,8 +84,8 @@ impl CipherPort for Argon2Aes {
         if field.ciphertext.len() < TAG_LEN {
             return Err(CryptoError::MalformedField);
         }
-        let cipher = Aes256Gcm::new_from_slice(key.expose_secret())
-            .map_err(|_| CryptoError::InvalidKey)?;
+        let cipher =
+            Aes256Gcm::new_from_slice(key.expose_secret()).map_err(|_| CryptoError::InvalidKey)?;
         let payload = Payload {
             msg: &field.ciphertext,
             aad: id.as_bytes(),
@@ -201,7 +201,9 @@ mod tests {
         let good_key = key_for(PASSWORD, &salt);
         let wrong_key = key_for(WRONG, &salt);
         let id = rid(1);
-        let field = Argon2Aes.encrypt(&id, &good_key, secret("classified")).unwrap();
+        let field = Argon2Aes
+            .encrypt(&id, &good_key, secret("classified"))
+            .unwrap();
 
         let err = Argon2Aes.decrypt(&id, &wrong_key, &field).unwrap_err();
         assert_eq!(err, CryptoError::AuthenticationFailed);

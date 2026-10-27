@@ -42,9 +42,7 @@ fn rid(n: u8) -> RecordId {
 fn seeded_vault(path: &Path, site: &str) -> Arc<Mutex<SqliteVaultRepository>> {
     let repo = SqliteVaultRepository::open(path).unwrap();
     let salt = crypto().random_salt();
-    let key = crypto()
-        .derive(secret(MASTER_PASSWORD), &salt)
-        .unwrap();
+    let key = crypto().derive(secret(MASTER_PASSWORD), &salt).unwrap();
     let validation = crypto()
         .encrypt(&rid(9), &key, secret("vault-validation"))
         .unwrap();
@@ -150,12 +148,16 @@ fn preview_confirms_without_writing_and_confirmed_import_applies() {
     let service = VaultImportService::new(Arc::clone(&repo));
 
     // Preview (cancel path): validated, nothing written, vault unchanged.
-    let result = service.import(SessionGate::Unlocked, Confirmation::Pending, &backup).unwrap();
+    let result = service
+        .import(SessionGate::Unlocked, Confirmation::Pending, &backup)
+        .unwrap();
     assert_eq!(result, ImportResult::ConfirmationRequired);
     assert_eq!(sites(&repo), vec!["github"]);
 
     // Confirm: revalidated and applied; the imported vault is now active.
-    let result = service.import(SessionGate::Unlocked, Confirmation::Confirmed, &backup).unwrap();
+    let result = service
+        .import(SessionGate::Unlocked, Confirmation::Confirmed, &backup)
+        .unwrap();
     assert_eq!(result, ImportResult::Applied);
     assert_eq!(sites(&repo), vec!["gitlab"]);
     assert!(repo.lock().unwrap().is_initialized().unwrap());
@@ -171,7 +173,9 @@ fn locked_import_is_refused_with_real_storage() {
     let service = VaultImportService::new(Arc::clone(&repo));
 
     assert!(matches!(
-        service.import(SessionGate::Locked, Confirmation::Confirmed, &backup).unwrap_err(),
+        service
+            .import(SessionGate::Locked, Confirmation::Confirmed, &backup)
+            .unwrap_err(),
         ImportServiceError::Locked
     ));
     assert_eq!(sites(&repo), vec!["github"], "locked import must not swap");
@@ -192,7 +196,9 @@ fn confirmed_import_swaps_atomically_and_deletes_rollback_only_after_success() {
     let backup_bytes = std::fs::read(&backup).unwrap();
     let service = VaultImportService::new(Arc::clone(&repo));
 
-    service.import(SessionGate::Unlocked, Confirmation::Confirmed, &backup).unwrap();
+    service
+        .import(SessionGate::Unlocked, Confirmation::Confirmed, &backup)
+        .unwrap();
 
     // The active vault file is the imported backup, byte-for-byte.
     assert_eq!(std::fs::read(&a_path).unwrap(), backup_bytes);
@@ -211,7 +217,9 @@ fn failed_import_leaves_the_current_vault_intact_and_usable() {
     std::fs::write(&garbage, b"not a database").unwrap();
     let service = VaultImportService::new(Arc::clone(&repo));
 
-    let err = service.import(SessionGate::Unlocked, Confirmation::Confirmed, &garbage).unwrap_err();
+    let err = service
+        .import(SessionGate::Unlocked, Confirmation::Confirmed, &garbage)
+        .unwrap_err();
     assert!(matches!(err, ImportServiceError::Storage(_)));
 
     // The current vault is preserved and the repository still serves it.

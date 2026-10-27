@@ -50,7 +50,10 @@ pub struct RecordIdParseError;
 
 impl std::fmt::Display for RecordIdParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "record id must be a 16-byte hex string (32 hex characters)")
+        write!(
+            f,
+            "record id must be a 16-byte hex string (32 hex characters)"
+        )
     }
 }
 

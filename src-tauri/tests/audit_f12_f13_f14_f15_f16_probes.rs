@@ -271,8 +271,7 @@ fn f15_public_error_enums_carry_non_exhaustive() {
 #[test]
 fn f14_the_core_service_does_not_import_the_crypto_adapter() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let src =
-        std::fs::read_to_string(root.join("src/core/application/vault_service.rs")).unwrap();
+    let src = std::fs::read_to_string(root.join("src/core/application/vault_service.rs")).unwrap();
     assert!(
         !src.contains("adapters::crypto::argon2_aes"),
         "core test reached back into the adapter"

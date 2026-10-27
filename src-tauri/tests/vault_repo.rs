@@ -16,13 +16,13 @@ use tempfile::TempDir;
 use keymaps2026_lib::adapters::backup::BackupService;
 use keymaps2026_lib::adapters::crypto::argon2_aes::Argon2Aes;
 use keymaps2026_lib::adapters::persistence::sqlite::SqliteVaultRepository;
+use keymaps2026_lib::core::application::gate::SessionGate;
 use keymaps2026_lib::core::domain::entry::{
     Category, EncryptedField, EntryRecord, Filters, RecordId,
 };
 use keymaps2026_lib::core::ports::cipher::{CipherPort, CryptoError, VaultKey};
 use keymaps2026_lib::core::ports::key_derivation::KeyDerivationPort;
 use keymaps2026_lib::core::ports::vault_repository::{RepositoryError, VaultRepository};
-use keymaps2026_lib::core::application::gate::SessionGate;
 
 const MASTER_PASSWORD: &str = "correct horse battery staple";
 
@@ -33,7 +33,9 @@ fn crypto() -> Argon2Aes {
 
 /// Derive a deterministic key from a fixed salt (independent of vault init).
 fn test_key() -> VaultKey {
-    crypto().derive(secret(MASTER_PASSWORD), &[7u8; 16]).unwrap()
+    crypto()
+        .derive(secret(MASTER_PASSWORD), &[7u8; 16])
+        .unwrap()
 }
 
 fn secret(s: &str) -> SecretString {
@@ -45,7 +47,14 @@ fn rid(n: u8) -> RecordId {
 }
 
 /// Build a full encrypted record for `site`, encrypting `password` under `key`.
-fn record(key: &VaultKey, id: RecordId, site: &str, email: &str, category: &str, password: &str) -> EntryRecord {
+fn record(
+    key: &VaultKey,
+    id: RecordId,
+    site: &str,
+    email: &str,
+    category: &str,
+    password: &str,
+) -> EntryRecord {
     let encrypted = crypto()
         .encrypt(&id, key, secret(password))
         .expect("encryption must succeed");
@@ -61,7 +70,13 @@ fn record(key: &VaultKey, id: RecordId, site: &str, email: &str, category: &str,
 }
 
 /// Convenience: save a record and return it.
-fn save(repo: &SqliteVaultRepository, key: &VaultKey, id: RecordId, site: &str, password: &str) -> EntryRecord {
+fn save(
+    repo: &SqliteVaultRepository,
+    key: &VaultKey,
+    id: RecordId,
+    site: &str,
+    password: &str,
+) -> EntryRecord {
     let e = record(key, id, site, "a@b.c", "servicios", password);
     repo.save(&e).expect("save must succeed");
     e
@@ -131,7 +146,9 @@ fn save_list_update_delete_roundtrip() {
     assert!(hits.iter().all(|e| e.site.contains("git")));
 
     // Category filter is exact.
-    let cats = repo.list(&Filters::new().with_category("servicios")).unwrap();
+    let cats = repo
+        .list(&Filters::new().with_category("servicios"))
+        .unwrap();
     assert_eq!(cats.len(), 3);
     let none = repo
         .list(&Filters::new().with_category("entretenimiento"))
@@ -153,9 +170,7 @@ fn save_list_update_delete_roundtrip() {
         category: "trabajo".into(),
         email: "b@b.c".into(),
         username: "user".into(),
-        password: crypto()
-            .encrypt(&b.id, &key, secret("new-secret"))
-            .unwrap(),
+        password: crypto().encrypt(&b.id, &key, secret("new-secret")).unwrap(),
         ..b.clone()
     };
     repo.save(&updated).unwrap();
@@ -176,14 +191,14 @@ fn save_list_update_delete_roundtrip() {
 
     // Delete removes only the targeted record.
     repo.delete(&rid(3)).unwrap();
-    assert!(repo.list(&Filters::new().with_site("amazon")).unwrap().is_empty());
+    assert!(repo
+        .list(&Filters::new().with_site("amazon"))
+        .unwrap()
+        .is_empty());
     assert_eq!(repo.list(&Filters::new()).unwrap().len(), 2);
 
     // Deleting a missing id reports NotFound.
-    assert_eq!(
-        repo.delete(&rid(3)).unwrap_err(),
-        RepositoryError::NotFound
-    );
+    assert_eq!(repo.delete(&rid(3)).unwrap_err(), RepositoryError::NotFound);
 }
 
 #[test]
@@ -226,7 +241,10 @@ fn get_returns_one_entry_by_id() {
     save(&repo, &key, rid(1), "github", "gh-secret");
     save(&repo, &key, rid(2), "gitlab", "gl-secret");
 
-    let found = repo.get(&rid(2)).unwrap().expect("stored entry must be found");
+    let found = repo
+        .get(&rid(2))
+        .unwrap()
+        .expect("stored entry must be found");
     assert_eq!(found.id, rid(2));
     assert_eq!(found.site, "gitlab");
     assert!(repo.get(&rid(9)).unwrap().is_none(), "unknown id is None");
@@ -317,7 +335,10 @@ fn identical_metadata_saves_twice_with_distinct_ids() {
     assert_eq!(hits.len(), 2);
     let other = hits.iter().find(|e| e.id == e2.id).unwrap();
     assert_eq!(
-        crypto().decrypt(&other.id, &key, &other.password).unwrap().expose_secret(),
+        crypto()
+            .decrypt(&other.id, &key, &other.password)
+            .unwrap()
+            .expose_secret(),
         "two"
     );
 }
@@ -359,7 +380,10 @@ fn records_and_metadata_survive_reopen() {
     let repo = SqliteVaultRepository::open(&db.path).unwrap();
 
     // Salt + validation metadata survived.
-    let meta = repo.vault_metadata().unwrap().expect("vault must be initialized");
+    let meta = repo
+        .vault_metadata()
+        .unwrap()
+        .expect("vault must be initialized");
     assert!(meta.salt.len() >= 16);
 
     // Same record IDs and encrypted context are available.
@@ -369,7 +393,9 @@ fn records_and_metadata_survive_reopen() {
     assert_eq!(github.id, rid(1));
 
     // The key derived from the persisted salt recovers the password.
-    let reopened_key = crypto().derive(secret(MASTER_PASSWORD), &meta.salt).unwrap();
+    let reopened_key = crypto()
+        .derive(secret(MASTER_PASSWORD), &meta.salt)
+        .unwrap();
     let recovered = crypto()
         .decrypt(&github.id, &reopened_key, &github.password)
         .unwrap();
@@ -529,9 +555,12 @@ fn list_categories_orders_by_case_normalized_name_with_exact_tiebreak() {
     // "Alfa" and "alfa" compare equally once case-normalized; the exact name
     // is the deterministic secondary key (uppercase sorts first byte-wise).
     // The four seeds are present too, so this proves interleaving as well.
-    repo.create_category(&Category::new("Beta", "#7a5220")).unwrap();
-    repo.create_category(&Category::new("alfa", "#2f5d8c")).unwrap();
-    repo.create_category(&Category::new("Alfa", "#2f6b3f")).unwrap();
+    repo.create_category(&Category::new("Beta", "#7a5220"))
+        .unwrap();
+    repo.create_category(&Category::new("alfa", "#2f5d8c"))
+        .unwrap();
+    repo.create_category(&Category::new("Alfa", "#2f6b3f"))
+        .unwrap();
 
     let names: Vec<String> = repo
         .list_categories()
@@ -542,7 +571,13 @@ fn list_categories_orders_by_case_normalized_name_with_exact_tiebreak() {
     assert_eq!(
         names,
         [
-            "Alfa", "alfa", "Beta", "entretenimiento", "estudio", "servicios", "trabajo"
+            "Alfa",
+            "alfa",
+            "Beta",
+            "entretenimiento",
+            "estudio",
+            "servicios",
+            "trabajo"
         ]
     );
 }
@@ -557,7 +592,8 @@ fn category_crud_recolor_and_usage_counts() {
     let repo = SqliteVaultRepository::open_in_memory().unwrap();
     let key = test_key();
 
-    repo.create_category(&Category::new("lectura", "#8a4f7d")).unwrap();
+    repo.create_category(&Category::new("lectura", "#8a4f7d"))
+        .unwrap();
     assert!(repo.category_exists("lectura").unwrap());
     assert!(!repo.category_exists("inexistente").unwrap());
     assert_eq!(repo.category_in_use("lectura").unwrap(), 0);
@@ -589,10 +625,18 @@ fn category_crud_recolor_and_usage_counts() {
 fn rename_cascades_to_all_referencing_entries_atomically() {
     let repo = SqliteVaultRepository::open_in_memory().unwrap();
     let key = test_key();
-    repo.create_category(&Category::new("lectura", "#8a4f7d")).unwrap();
+    repo.create_category(&Category::new("lectura", "#8a4f7d"))
+        .unwrap();
     for n in 1..=3 {
-        repo.save(&record(&key, rid(n), &format!("site{n}"), "a@b.c", "lectura", "pw"))
-            .unwrap();
+        repo.save(&record(
+            &key,
+            rid(n),
+            &format!("site{n}"),
+            "a@b.c",
+            "lectura",
+            "pw",
+        ))
+        .unwrap();
     }
 
     let affected = repo
@@ -613,7 +657,8 @@ fn rename_cascades_to_all_referencing_entries_atomically() {
 fn rename_collision_rolls_back_category_and_entries() {
     let repo = SqliteVaultRepository::open_in_memory().unwrap();
     let key = test_key();
-    repo.create_category(&Category::new("lectura", "#8a4f7d")).unwrap();
+    repo.create_category(&Category::new("lectura", "#8a4f7d"))
+        .unwrap();
     repo.save(&record(&key, rid(1), "github", "a@b.c", "lectura", "pw"))
         .unwrap();
 
@@ -631,7 +676,10 @@ fn rename_collision_rolls_back_category_and_entries() {
     );
     assert!(categories.iter().any(|c| c.name == "trabajo"));
     let entries = repo.list(&Filters::new()).unwrap();
-    assert_eq!(entries[0].category, "lectura", "entry reference must roll back");
+    assert_eq!(
+        entries[0].category, "lectura",
+        "entry reference must roll back"
+    );
 }
 
 #[test]
@@ -641,7 +689,8 @@ fn repo_delete_removes_row_and_leaves_entry_references_unchanged() {
     // plaintext reference (documented no-FK behavior).
     let repo = SqliteVaultRepository::open_in_memory().unwrap();
     let key = test_key();
-    repo.create_category(&Category::new("lectura", "#8a4f7d")).unwrap();
+    repo.create_category(&Category::new("lectura", "#8a4f7d"))
+        .unwrap();
     repo.save(&record(&key, rid(1), "bookmarks", "a@b.c", "lectura", "pw"))
         .unwrap();
 
@@ -662,7 +711,8 @@ fn backup_and_restore_preserve_seeded_and_custom_category_colors() {
     let db = Db::new();
     let repo = SqliteVaultRepository::open(&db.path).unwrap();
     // A custom category plus an entry referencing it, on top of the seeds.
-    repo.create_category(&Category::new("lectura", "#8a4f7d")).unwrap();
+    repo.create_category(&Category::new("lectura", "#8a4f7d"))
+        .unwrap();
     let key = test_key();
     repo.save(&record(&key, rid(1), "bookmarks", "a@b.c", "lectura", "pw"))
         .unwrap();
