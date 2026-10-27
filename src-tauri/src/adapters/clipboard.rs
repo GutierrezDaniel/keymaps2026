@@ -48,15 +48,31 @@ impl SystemClipboard for ArboardBackend {
     }
 }
 
+/// Runs `action` once `expiry` has elapsed. Production spawns a thread; tests
+/// hold the action and fire it manually, so no test waits on the wall clock
+/// (RUST-AUDIT F19).
+type Scheduler = Arc<dyn Fn(Duration, Box<dyn FnOnce() + Send>) + Send + Sync>;
+
 /// Copies a secret for a bounded expiry, then conditionally clears it.
 ///
-/// The clear runs on a detached thread after `expiry`: it re-reads the
-/// clipboard and only clears when the value is unchanged. Errors during the
-/// clear are intentionally swallowed — losing the clear is not a failure of the
-/// copy operation, and a failed read means we cannot prove ownership of the
-/// current value, so we leave it alone.
+/// The clear is scheduled for after `expiry`: it re-reads the clipboard and only
+/// clears when the value is unchanged. Errors during the clear are intentionally
+/// swallowed — losing the clear is not a failure of the copy operation, and a
+/// failed read means we cannot prove ownership of the current value, so we
+/// leave it alone.
 pub struct Clipboard {
     inner: Arc<Mutex<Box<dyn SystemClipboard>>>,
+    scheduler: Scheduler,
+}
+
+/// Production scheduler: one detached thread per scheduled clear.
+fn thread_scheduler() -> Scheduler {
+    Arc::new(|expiry: Duration, action: Box<dyn FnOnce() + Send>| {
+        std::thread::spawn(move || {
+            std::thread::sleep(expiry);
+            action();
+        });
+    })
 }
 
 impl Clipboard {
@@ -70,6 +86,19 @@ impl Clipboard {
     pub(crate) fn with_backend(backend: Box<dyn SystemClipboard>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(backend)),
+            scheduler: thread_scheduler(),
+        }
+    }
+
+    /// Build an adapter whose clears run when the test says so.
+    #[cfg(test)]
+    pub(crate) fn with_scheduler(
+        backend: Box<dyn SystemClipboard>,
+        scheduler: Scheduler,
+    ) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(backend)),
+            scheduler,
         }
     }
 }
@@ -82,8 +111,7 @@ impl ClipboardPort for Clipboard {
         self.inner.lock().unwrap().set_text(&copied)?;
 
         let inner = Arc::clone(&self.inner);
-        std::thread::spawn(move || {
-            std::thread::sleep(expiry);
+        (self.scheduler)(expiry, Box::new(move || {
             let mut guard = inner.lock().unwrap();
             // Conditional clear: only wipe when the current clipboard content is
             // still the value we placed there.
@@ -97,7 +125,7 @@ impl ClipboardPort for Clipboard {
             if unchanged {
                 let _ = guard.clear();
             }
-        });
+        }));
         Ok(())
     }
 }
@@ -118,13 +146,21 @@ pub(crate) mod tests {
     #[derive(Clone)]
     pub(crate) struct FakeClipboard {
         state: Arc<Mutex<Option<String>>>,
+        reads_fail: Arc<std::sync::atomic::AtomicBool>,
     }
 
     impl FakeClipboard {
         pub(crate) fn new() -> Self {
             Self {
                 state: Arc::new(Mutex::new(None)),
+                reads_fail: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             }
+        }
+
+        /// Make every subsequent read fail, simulating an unavailable backend.
+        pub(crate) fn fail_reads(&self) {
+            self.reads_fail
+                .store(true, std::sync::atomic::Ordering::SeqCst);
         }
 
         pub(crate) fn current(&self) -> Option<String> {
@@ -144,6 +180,12 @@ pub(crate) mod tests {
         }
 
         fn get_text(&mut self) -> Result<String, ClipboardError> {
+            if self
+                .reads_fail
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(ClipboardError::Access("fake backend unavailable".into()));
+            }
             Ok(self.state.lock().unwrap().clone().unwrap_or_default())
         }
 
@@ -153,52 +195,103 @@ pub(crate) mod tests {
         }
     }
 
-    fn fake() -> (Clipboard, FakeClipboard) {
+    /// Captures the scheduled clear instead of waiting for it, so the timing
+    /// tests are deterministic: they fire the clear when the scenario says so.
+    #[derive(Clone, Default)]
+    struct ManualScheduler {
+        pending: Arc<Mutex<Vec<(Duration, Box<dyn FnOnce() + Send>)>>>,
+    }
+
+    impl ManualScheduler {
+        fn scheduler(&self) -> Scheduler {
+            let pending = Arc::clone(&self.pending);
+            Arc::new(move |expiry, action| {
+                pending.lock().unwrap().push((expiry, action));
+            })
+        }
+
+        /// Run every captured clear, oldest first.
+        fn run_pending(&self) {
+            let pending: Vec<_> = std::mem::take(&mut *self.pending.lock().unwrap());
+            for (_, action) in pending {
+                action();
+            }
+        }
+
+        fn expiry(&self) -> Option<Duration> {
+            self.pending.lock().unwrap().first().map(|(d, _)| *d)
+        }
+    }
+
+    fn fake() -> (Clipboard, FakeClipboard, ManualScheduler) {
         let backend = FakeClipboard::new();
-        let clipboard = Clipboard::with_backend(Box::new(backend.clone()));
-        (clipboard, backend)
+        let scheduler = ManualScheduler::default();
+        let clipboard =
+            Clipboard::with_scheduler(Box::new(backend.clone()), scheduler.scheduler());
+        (clipboard, backend, scheduler)
     }
 
     fn secret(s: &str) -> SecretString {
         SecretString::from(s.to_string())
     }
 
-    /// Poll `f` every 10ms for up to one second — keeps timing tests robust.
-    fn wait_until(f: impl Fn() -> bool) -> bool {
-        for _ in 0..100 {
-            if f() {
-                return true;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        f()
-    }
-
     #[test]
     fn copy_places_value_on_clipboard() {
-        let (clipboard, backend) = fake();
-        clipboard.copy_for(secret("s3cr3t!"), Duration::from_secs(30)).unwrap();
+        let (clipboard, backend, scheduler) = fake();
+        clipboard
+            .copy_for(secret("s3cr3t!"), Duration::from_secs(30))
+            .unwrap();
         assert_eq!(backend.current().as_deref(), Some("s3cr3t!"));
+        assert_eq!(
+            scheduler.expiry(),
+            Some(Duration::from_secs(30)),
+            "the clear must be scheduled for the requested expiry"
+        );
     }
 
-    /// vault-entries "Clipboard expiration": the copied value is cleared no
-    /// later than 20s — here with a short expiry, proving the scheduled clear.
+    /// vault-entries "Clipboard expiration": the value is cleared once the
+    /// scheduled expiry fires.
     #[test]
     fn clears_copied_value_after_expiry_when_unchanged() {
-        let (clipboard, backend) = fake();
-        clipboard.copy_for(secret("s3cr3t!"), Duration::from_millis(20)).unwrap();
-        assert!(wait_until(|| backend.current().is_none()), "clipboard must clear after expiry");
+        let (clipboard, backend, scheduler) = fake();
+        clipboard
+            .copy_for(secret("s3cr3t!"), CLIPBOARD_EXPIRY)
+            .unwrap();
+
+        scheduler.run_pending();
+
+        assert!(backend.current().is_none(), "clipboard must clear after expiry");
     }
 
     /// The clear must never destroy a newer clipboard copy (design: "avoids
     /// destroying a newer clipboard copy").
     #[test]
     fn does_not_clear_when_clipboard_was_changed() {
-        let (clipboard, backend) = fake();
-        clipboard.copy_for(secret("mine"), Duration::from_millis(20)).unwrap();
-        // The user copies something else before the 20s window elapses.
+        let (clipboard, backend, scheduler) = fake();
+        clipboard
+            .copy_for(secret("mine"), CLIPBOARD_EXPIRY)
+            .unwrap();
+        // The user copies something else before the expiry elapses.
         backend.overwrite("newer copy");
-        std::thread::sleep(Duration::from_millis(150));
+
+        scheduler.run_pending();
+
+        assert_eq!(backend.current().as_deref(), Some("newer copy"));
+    }
+
+    /// A clear that cannot read the clipboard leaves the value alone: we cannot
+    /// prove ownership, so destroying it would be worse than keeping it.
+    #[test]
+    fn failed_read_keeps_the_clipboard_untouched() {
+        let (clipboard, backend, scheduler) = fake();
+        clipboard
+            .copy_for(secret("mine"), CLIPBOARD_EXPIRY)
+            .unwrap();
+        backend.overwrite("newer copy");
+        backend.fail_reads();
+
+        scheduler.run_pending();
+
         assert_eq!(backend.current().as_deref(), Some("newer copy"));
     }
 }
