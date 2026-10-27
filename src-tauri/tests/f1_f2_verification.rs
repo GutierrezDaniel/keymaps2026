@@ -118,12 +118,12 @@ fn snapshot(db: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 fn f2_update_of_missing_id_is_not_found_and_writes_nothing() {
     let dir = TempDir::new().unwrap();
     let (svc, key, db) = service(dir.path());
-    svc.create_entry(rid(1), &key, &input("alpha", "pw"))
+    svc.create_entry(rid(1), &key, input("alpha", "pw"))
         .unwrap();
     let before = snapshot(&db);
 
     let err = svc
-        .update_entry(rid(9), &key, &input("ghost", "p"))
+        .update_entry(rid(9), &key, input("ghost", "p"))
         .unwrap_err();
 
     assert!(matches!(err, ServiceError::NotFound));
@@ -140,7 +140,7 @@ fn f2_update_of_missing_id_is_not_found_and_writes_nothing() {
 fn f2_update_of_known_id_replaces_in_place() {
     let dir = TempDir::new().unwrap();
     let (svc, key, db) = service(dir.path());
-    svc.create_entry(rid(1), &key, &input("github", "old"))
+    svc.create_entry(rid(1), &key, input("github", "old"))
         .unwrap();
     let old = SqliteVaultRepository::open(&db)
         .unwrap()
@@ -149,7 +149,7 @@ fn f2_update_of_known_id_replaces_in_place() {
         .remove(0)
         .password;
 
-    svc.update_entry(rid(1), &key, &input("gitlab", "new"))
+    svc.update_entry(rid(1), &key, input("gitlab", "new"))
         .unwrap();
 
     let listed = svc.list_entries(&Filters::new()).unwrap();

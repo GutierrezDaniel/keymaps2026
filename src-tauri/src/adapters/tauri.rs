@@ -485,6 +485,10 @@ impl VaultRepository for Arc<Mutex<SqliteVaultRepository>> {
         self.lock().unwrap().list(filters)
     }
 
+    fn get(&self, id: &RecordId) -> Result<Option<EntryRecord>, RepositoryError> {
+        self.lock().unwrap().get(id)
+    }
+
     fn list_emails(&self) -> Result<Vec<String>, RepositoryError> {
         self.lock().unwrap().list_emails()
     }
@@ -693,7 +697,7 @@ impl VaultApp {
         self.with_key(|key| Ok(self.service.get_entry_details(id, key)?))
     }
 
-    pub fn create_entry(&self, input: &EntryInput) -> Result<RecordId, CommandError> {
+    pub fn create_entry(&self, input: EntryInput) -> Result<RecordId, CommandError> {
         self.with_key(|key| {
             let mut bytes = [0u8; 16];
             OsRng.fill_bytes(&mut bytes);
@@ -703,7 +707,7 @@ impl VaultApp {
         })
     }
 
-    pub fn update_entry(&self, id: &RecordId, input: &EntryInput) -> Result<(), CommandError> {
+    pub fn update_entry(&self, id: &RecordId, input: EntryInput) -> Result<(), CommandError> {
         self.with_key(|key| Ok(self.service.update_entry(*id, key, input)?))
     }
 
@@ -805,11 +809,7 @@ impl VaultApp {
         let value: SecretString = self.with_key(|key| match field {
             CopyField::Password => Ok(self.service.get_entry_details(id, key)?.password),
             CopyField::Link | CopyField::Email | CopyField::Username => {
-                let summaries = self.service.list_entries(&Filters::new())?;
-                let summary = summaries
-                    .into_iter()
-                    .find(|s| &s.id == id)
-                    .ok_or(CommandError::NotFound)?;
+                let summary = self.service.get_entry_summary(id)?;
                 let text = match field {
                     CopyField::Link => summary.link,
                     CopyField::Email => summary.email,
@@ -991,7 +991,7 @@ fn create(
     input: EntryInputDto,
 ) -> Result<String, CommandError> {
     let input: EntryInput = input.into();
-    let id = state.create_entry(&input)?;
+    let id = state.create_entry(input)?;
     Ok(id.to_string())
 }
 
@@ -1003,7 +1003,7 @@ fn update(
     input: EntryInputDto,
 ) -> Result<(), CommandError> {
     let id: RecordId = id.parse().map_err(|_| CommandError::InvalidField)?;
-    state.update_entry(&id, &input.into())
+    state.update_entry(&id, input.into())
 }
 
 #[cfg(feature = "tauri-app")]
@@ -1506,7 +1506,7 @@ mod tests {
     #[test]
     fn entry_crud_through_commands() {
         let app = unlocked_app();
-        let id = app.create_entry(&entry_input("github", "s3cr3t")).unwrap();
+        let id = app.create_entry(entry_input("github", "s3cr3t")).unwrap();
 
         let details = app.get_entry_details(&id).unwrap();
         assert_eq!(details.summary.site, "github");
@@ -1516,7 +1516,7 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, id);
 
-        app.update_entry(&id, &entry_input("github", "new-secret")).unwrap();
+        app.update_entry(&id, entry_input("github", "new-secret")).unwrap();
         assert_eq!(app.get_entry_details(&id).unwrap().password.expose_secret(), "new-secret");
 
         app.delete_entry(&id).unwrap();
@@ -1529,7 +1529,7 @@ mod tests {
         let app = unlocked_app();
         app.lock();
         assert_eq!(
-            app.create_entry(&entry_input("x", "y")).unwrap_err(),
+            app.create_entry(entry_input("x", "y")).unwrap_err(),
             CommandError::Locked
         );
         assert_eq!(
@@ -1542,8 +1542,8 @@ mod tests {
     #[test]
     fn list_applies_filters() {
         let app = unlocked_app();
-        app.create_entry(&entry_input("github", "a")).unwrap();
-        app.create_entry(&entry_input("gitlab", "b")).unwrap();
+        app.create_entry(entry_input("github", "a")).unwrap();
+        app.create_entry(entry_input("gitlab", "b")).unwrap();
 
         let filters = Filters::new().with_site("git");
         assert_eq!(app.list_entries(&filters).unwrap().len(), 2);
@@ -1554,7 +1554,7 @@ mod tests {
     #[test]
     fn list_emails_requires_unlocked_session_and_returns_distinct() {
         let app = unlocked_app();
-        app.create_entry(&entry_input("github", "a")).unwrap();
+        app.create_entry(entry_input("github", "a")).unwrap();
         let team = EntryInput::new(
             "gitlab",
             "https://gitlab",
@@ -1563,7 +1563,7 @@ mod tests {
             "user",
             "entretenimiento",
         );
-        app.create_entry(&team).unwrap();
+        app.create_entry(team).unwrap();
 
         let emails = app.list_emails().unwrap();
         assert_eq!(
@@ -1583,7 +1583,7 @@ mod tests {
     fn copy_field_places_password_and_metadata() {
         let (app, fake) = unlocked_app_with_clipboard();
         let id = app
-            .create_entry(&entry_input("github", "s3cr3t"))
+            .create_entry(entry_input("github", "s3cr3t"))
             .unwrap();
 
         app.copy_field(&id, CopyField::Password).unwrap();
@@ -1639,7 +1639,7 @@ mod tests {
         let app = file_app(dir);
         app.create_vault(secret(MASTER_PASSWORD)).unwrap();
         app.unlock(secret(MASTER_PASSWORD)).unwrap();
-        app.create_entry(&entry_input("github", "imported-secret"))
+        app.create_entry(entry_input("github", "imported-secret"))
             .unwrap();
         let dest = dir.path().join("backup.db");
         app.export_backup(&dest).unwrap();
@@ -1676,7 +1676,7 @@ mod tests {
         let app = file_app(&dir);
         app.create_vault(secret("vault-b-password")).unwrap();
         app.unlock(secret("vault-b-password")).unwrap();
-        app.create_entry(&entry_input("b-site", "b-secret")).unwrap();
+        app.create_entry(entry_input("b-site", "b-secret")).unwrap();
 
         let result = app.import_backup(&backup, false).unwrap();
         assert_eq!(result, ImportResult::ConfirmationRequired);
@@ -1700,7 +1700,7 @@ mod tests {
         let app = file_app(&dir);
         app.create_vault(secret("vault-b-password")).unwrap();
         app.unlock(secret("vault-b-password")).unwrap();
-        app.create_entry(&entry_input("b-site", "b-secret")).unwrap();
+        app.create_entry(entry_input("b-site", "b-secret")).unwrap();
 
         let result = app.import_backup(&backup, true).unwrap();
         assert_eq!(result, ImportResult::Applied);
@@ -1759,7 +1759,7 @@ mod tests {
         let app = file_app(&dir);
         app.create_vault(secret(MASTER_PASSWORD)).unwrap();
         app.unlock(secret(MASTER_PASSWORD)).unwrap();
-        app.create_entry(&entry_input("kept", "kept-secret")).unwrap();
+        app.create_entry(entry_input("kept", "kept-secret")).unwrap();
 
         // A directory in the stage path makes the staged copy fail *after* the
         // candidate validated: a storage failure, not a validation failure.
@@ -1949,7 +1949,7 @@ mod tests {
     fn recolor_applies_directly_and_rename_preview_requires_confirmation() {
         let app = unlocked_app();
         let id = app
-            .create_entry(&entry_input_for("github", "s3cr3t", "trabajo"))
+            .create_entry(entry_input_for("github", "s3cr3t", "trabajo"))
             .unwrap();
 
         // Recolor (same name) applies without confirmation.
@@ -1997,7 +1997,7 @@ mod tests {
     fn delete_category_refuses_in_use_and_last_category_through_commands() {
         // In-use category: refused.
         let app = unlocked_app();
-        app.create_entry(&entry_input_for("github", "p", "trabajo"))
+        app.create_entry(entry_input_for("github", "p", "trabajo"))
             .unwrap();
         assert_eq!(app.delete_category("trabajo").unwrap_err(), CommandError::CategoryInUse);
         assert_eq!(
@@ -2019,14 +2019,14 @@ mod tests {
         // An entry referencing a persisted custom category succeeds.
         app.create_category(&Category::new("lectura", "#8a4f7d")).unwrap();
         let id = app
-            .create_entry(&entry_input_for("bookmarks", "p", "lectura"))
+            .create_entry(entry_input_for("bookmarks", "p", "lectura"))
             .unwrap();
         assert_eq!(app.get_entry_details(&id).unwrap().summary.category, "lectura");
 
         // An entry referencing an absent category is rejected (wire-stable
         // InvalidCategory kind for the existing frontend mapping).
         assert_eq!(
-            app.create_entry(&entry_input_for("ghost", "p", "no-existe"))
+            app.create_entry(entry_input_for("ghost", "p", "no-existe"))
                 .unwrap_err(),
             CommandError::InvalidCategory
         );

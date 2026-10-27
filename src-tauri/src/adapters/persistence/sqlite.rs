@@ -527,6 +527,20 @@ impl VaultRepository for SqliteVaultRepository {
             .map_err(store_err)
     }
 
+    fn get(&self, id: &RecordId) -> Result<Option<EntryRecord>, RepositoryError> {
+        // Primary-key lookup: no scan, no filters, one row at most.
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, site, link, category, email, username, password_nonce, password_ciphertext
+                 FROM entries WHERE id = ?1",
+            )
+            .map_err(store_err)?;
+        stmt.query_row(params![id.as_bytes().as_slice()], Self::row_to_entry)
+            .optional()
+            .map_err(store_err)
+    }
+
     fn list_emails(&self) -> Result<Vec<String>, RepositoryError> {
         // DISTINCT collapses entries sharing an email; empty strings (an
         // optional field) are excluded; ORDER BY yields ascending (BINARY)

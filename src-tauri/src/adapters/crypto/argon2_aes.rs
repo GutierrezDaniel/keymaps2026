@@ -90,11 +90,16 @@ impl CipherPort for Argon2Aes {
             msg: &field.ciphertext,
             aad: id.as_bytes(),
         };
-        let plaintext = cipher
-            .decrypt(Nonce::from_slice(&field.nonce), payload)
-            .map_err(|_| CryptoError::AuthenticationFailed)?;
-        let text = String::from_utf8(plaintext.to_vec()).map_err(|_| CryptoError::MalformedField)?;
-        Ok(SecretString::from(text))
+        // The decrypted buffer is a secret: keep it in a zeroizing wrapper so
+        // the intermediate copy is wiped on drop, and validate in place instead
+        // of cloning it into a second `Vec` (RUST-AUDIT F10).
+        let plaintext = Zeroizing::new(
+            cipher
+                .decrypt(Nonce::from_slice(&field.nonce), payload)
+                .map_err(|_| CryptoError::AuthenticationFailed)?,
+        );
+        let text = std::str::from_utf8(&plaintext).map_err(|_| CryptoError::MalformedField)?;
+        Ok(SecretString::from(text.to_string()))
     }
 }
 

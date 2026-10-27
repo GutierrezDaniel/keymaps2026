@@ -205,6 +205,19 @@ pub struct EntrySummary {
     pub category: String,
 }
 
+impl From<EntryRecord> for EntrySummary {
+    fn from(record: EntryRecord) -> Self {
+        Self {
+            id: record.id,
+            site: record.site,
+            link: record.link,
+            email: record.email,
+            username: record.username,
+            category: record.category,
+        }
+    }
+}
+
 /// A full entry view including the decrypted password. The password is transient.
 #[derive(Clone, Debug)]
 pub struct EntryDetails {
