@@ -34,6 +34,7 @@ use crate::adapters::clipboard::{Clipboard, CLIPBOARD_EXPIRY};
 use crate::adapters::crypto::argon2_aes::Argon2Aes;
 use crate::adapters::observability::{Event, ImportRejection, LockReason};
 use crate::adapters::persistence::sqlite::SqliteVaultRepository;
+use crate::core::application::gate::{Confirmation, SessionGate};
 use crate::core::application::vault_import_service::{ImportResult, ImportServiceError, VaultImportService};
 use crate::core::application::vault_service::{ServiceError, UpdateCategoryResult, VaultService};
 use crate::core::domain::entry::{
@@ -360,14 +361,14 @@ pub enum CopyField {
 
 impl From<EntryInputDto> for EntryInput {
     fn from(dto: EntryInputDto) -> Self {
-        EntryInput::new(
-            dto.site,
-            dto.link,
-            dto.password,
-            dto.email,
-            dto.username,
-            dto.category,
-        )
+        EntryInput {
+            site: dto.site,
+            link: dto.link,
+            password: dto.password,
+            email: dto.email,
+            username: dto.username,
+            category: dto.category,
+        }
     }
 }
 
@@ -529,7 +530,7 @@ impl VaultRepository for Arc<Mutex<SqliteVaultRepository>> {
 /// The managed application state behind every Tauri command.
 pub struct VaultApp {
     repo: Arc<Mutex<SqliteVaultRepository>>,
-    service: VaultService<Arc<Mutex<SqliteVaultRepository>>, Argon2Aes, Argon2Aes>,
+    service: VaultService<Arc<Mutex<SqliteVaultRepository>>, Argon2Aes>,
     kdf: Argon2Aes,
     cipher: Argon2Aes,
     session: Arc<Mutex<Option<Session>>>,
@@ -542,7 +543,7 @@ pub struct VaultApp {
 impl VaultApp {
     pub fn new(repo: SqliteVaultRepository, clipboard: Clipboard) -> Self {
         let shared = Arc::new(Mutex::new(repo));
-        let service = VaultService::new(Arc::clone(&shared), Argon2Aes, Argon2Aes);
+        let service = VaultService::new(Arc::clone(&shared), Argon2Aes);
         let backup = BackupService::new(Arc::clone(&shared));
         let import = VaultImportService::new(Arc::clone(&shared));
         Self {
@@ -743,7 +744,7 @@ impl VaultApp {
             &request.old_name,
             &request.new_name,
             &request.color,
-            request.confirmed,
+            Confirmation::from(request.confirmed),
         )?)
     }
 
@@ -760,7 +761,7 @@ impl VaultApp {
     /// locked (vault-backup "Safe export availability").
     pub fn export_backup(&self, dest: &Path) -> Result<(), CommandError> {
         self.require_unlocked()?;
-        Ok(self.backup.export(true, dest)?)
+        Ok(self.backup.export(SessionGate::Unlocked, dest)?)
     }
 
     /// Import an encrypted native vault from `source` (vault-import spec).
@@ -779,7 +780,10 @@ impl VaultApp {
         confirmed: bool,
     ) -> Result<ImportResult, CommandError> {
         self.require_unlocked()?;
-        let result = match self.import.import(true, confirmed, source) {
+        let result = match self
+            .import
+            .import(SessionGate::Unlocked, Confirmation::from(confirmed), source)
+        {
             Ok(result) => result,
             Err(error) => {
                 // Only a validation failure provably leaves the vault files
@@ -1147,15 +1151,15 @@ mod tests {
     }
 
     fn entry_input(site: &str, password: &str) -> EntryInput {
-        EntryInput::new(
-            site,
-            format!("https://{site}"),
-            secret(password),
-            "a@b.c",
-            "user",
+        EntryInput {
+            site: site.to_string(),
+            link: format!("https://{site}"),
+            password: secret(password),
+            email: "a@b.c".to_string(),
+            username: "user".to_string(),
             // A seeded category: valid through the repository-backed check.
-            "entretenimiento",
-        )
+            category: "entretenimiento".to_string(),
+        }
     }
 
     fn rid(n: u8) -> RecordId {
@@ -1555,14 +1559,14 @@ mod tests {
     fn list_emails_requires_unlocked_session_and_returns_distinct() {
         let app = unlocked_app();
         app.create_entry(entry_input("github", "a")).unwrap();
-        let team = EntryInput::new(
-            "gitlab",
-            "https://gitlab",
-            secret("b"),
-            "team@example.com",
-            "user",
-            "entretenimiento",
-        );
+        let team = EntryInput {
+            site: "gitlab".to_string(),
+            link: "https://gitlab".to_string(),
+            password: secret("b"),
+            email: "team@example.com".to_string(),
+            username: "user".to_string(),
+            category: "entretenimiento".to_string(),
+        };
         app.create_entry(team).unwrap();
 
         let emails = app.list_emails().unwrap();
@@ -1870,14 +1874,14 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn entry_input_for(site: &str, password: &str, category: &str) -> EntryInput {
-        EntryInput::new(
-            site,
-            format!("https://{site}"),
-            secret(password),
-            "a@b.c",
-            "user",
-            category,
-        )
+        EntryInput {
+            site: site.to_string(),
+            link: format!("https://{site}"),
+            password: secret(password),
+            email: "a@b.c".to_string(),
+            username: "user".to_string(),
+            category: category.to_string(),
+        }
     }
 
     fn update_request(old_name: &str, new_name: &str, color: &str, confirmed: bool) -> UpdateCategoryRequest {

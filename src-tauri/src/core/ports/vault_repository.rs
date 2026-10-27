@@ -8,6 +8,7 @@ use crate::core::domain::entry::{Category, EntryRecord, Filters, RecordId};
 
 /// Persistence errors. Never carries secret material.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum RepositoryError {
     #[error("entry not found")]
     NotFound,

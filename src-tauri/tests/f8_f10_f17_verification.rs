@@ -22,6 +22,7 @@ use keymaps2026_lib::core::domain::entry::{
 use keymaps2026_lib::core::ports::cipher::{CipherPort, CryptoError, VaultKey};
 use keymaps2026_lib::core::ports::key_derivation::KeyDerivationPort;
 use keymaps2026_lib::core::ports::vault_repository::VaultRepository;
+use keymaps2026_lib::core::application::gate::SessionGate;
 
 const MASTER_PASSWORD: &str = "hunter2";
 
@@ -56,25 +57,25 @@ fn stored_record(key: &VaultKey, id: RecordId, site: &str) -> EntryRecord {
     }
 }
 
-type Service = VaultService<SqliteVaultRepository, Argon2Aes, Argon2Aes>;
+type Service = VaultService<SqliteVaultRepository, Argon2Aes>;
 
 /// A file-backed service over an initialized vault plus its derived key.
 fn service(dir: &TempDir) -> (Service, VaultKey) {
     let key = test_key();
     let repo = SqliteVaultRepository::open(&dir.path().join("vault.db")).unwrap();
     repo.init_vault(vec![7u8; 16], &validation(&key)).unwrap();
-    (VaultService::new(repo, Argon2Aes, Argon2Aes), key)
+    (VaultService::new(repo, Argon2Aes), key)
 }
 
 fn github_input(password: &str) -> EntryInput {
-    EntryInput::new(
-        "github",
-        "https://github.com/x",
-        secret(password),
-        "dev@example.com",
-        "octocat",
-        "trabajo",
-    )
+    EntryInput {
+        site: "github".to_string(),
+        link: "https://github.com/x".to_string(),
+        password: secret(password),
+        email: "dev@example.com".to_string(),
+        username: "octocat".to_string(),
+        category: "trabajo".to_string(),
+    }
 }
 
 /// F8: `get` returns exactly the stored row for a known id and `None` for an
@@ -270,14 +271,14 @@ fn f17_create_and_update_map_every_field_and_bind_the_id() {
     svc.create_entry(
         id,
         &key,
-        EntryInput::new(
-            "site-x",
-            "https://x.example/path",
-            secret("p@ss w0rd \u{2603}"),
-            "x@example.com",
-            "user-x",
-            "estudio",
-        ),
+        EntryInput {
+            site: "site-x".to_string(),
+            link: "https://x.example/path".to_string(),
+            password: secret("p@ss w0rd \u{2603}"),
+            email: "x@example.com".to_string(),
+            username: "user-x".to_string(),
+            category: "estudio".to_string(),
+        },
     )
     .unwrap();
 
@@ -307,14 +308,14 @@ fn f17_create_and_update_map_every_field_and_bind_the_id() {
     svc.update_entry(
         id,
         &key,
-        EntryInput::new(
-            "site-y",
-            "https://y.example",
-            secret("new-pw"),
-            "y@example.com",
-            "user-y",
-            "trabajo",
-        ),
+        EntryInput {
+            site: "site-y".to_string(),
+            link: "https://y.example".to_string(),
+            password: secret("new-pw"),
+            email: "y@example.com".to_string(),
+            username: "user-y".to_string(),
+            category: "trabajo".to_string(),
+        },
     )
     .unwrap();
     let updated = SqliteVaultRepository::open(&dir.path().join("vault.db"))
@@ -342,7 +343,7 @@ fn f17_create_and_update_map_every_field_and_bind_the_id() {
     ));
     let dest = dir.path().join("backup.db");
     BackupService::new(Arc::clone(&repo))
-        .export(true, &dest)
+        .export(SessionGate::Unlocked, &dest)
         .unwrap();
     let exported = SqliteVaultRepository::open(&dest)
         .unwrap()

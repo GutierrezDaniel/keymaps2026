@@ -174,25 +174,9 @@ pub struct EntryInput {
     pub category: String,
 }
 
-impl EntryInput {
-    pub fn new(
-        site: impl Into<String>,
-        link: impl Into<String>,
-        password: SecretString,
-        email: impl Into<String>,
-        username: impl Into<String>,
-        category: impl Into<String>,
-    ) -> Self {
-        Self {
-            site: site.into(),
-            link: link.into(),
-            password,
-            email: email.into(),
-            username: username.into(),
-            category: category.into(),
-        }
-    }
-}
+// No positional constructor: with six fields, two `&str` arguments would swap
+// silently (`email` ↔ `username`). Callers build the struct literal, where every
+// value is named (RUST-AUDIT F12).
 
 /// A metadata-only view of an entry (no secret material).
 #[derive(Clone, Debug, PartialEq, Eq)]

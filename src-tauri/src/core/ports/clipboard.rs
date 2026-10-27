@@ -9,6 +9,7 @@ use secrecy::SecretString;
 
 /// Clipboard errors. Never carries secret material.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum ClipboardError {
     #[error("clipboard access failed: {0}")]
     Access(String),

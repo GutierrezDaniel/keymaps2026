@@ -4,16 +4,17 @@
 //! Secrets only ever pass through the cipher port as [`SecretString`] and the
 //! derived key as a zeroizing [`VaultKey`]; plaintext never flows into metadata.
 
+use crate::core::application::gate::Confirmation;
 use crate::core::domain::entry::{
     is_valid_category_color, is_valid_category_name, Category, EntryDetails, EntryInput,
     EntryRecord, EntrySummary, Filters, RecordId,
 };
 use crate::core::ports::cipher::{CipherPort, CryptoError, VaultKey};
-use crate::core::ports::key_derivation::KeyDerivationPort;
 use crate::core::ports::vault_repository::{RepositoryError, VaultRepository};
 
 /// Errors surfaced by the application service.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ServiceError {
     #[error("crypto failure: {0}")]
     Crypto(#[from] CryptoError),
@@ -49,24 +50,22 @@ pub enum UpdateCategoryResult {
 }
 
 /// Use cases for managing vault entries.
-pub struct VaultService<R, C, K> {
+///
+/// Only the repository and the cipher are used: derivation belongs to the
+/// caller (the command layer), which is why this used to carry a dead `K`
+/// type parameter (RUST-AUDIT F13).
+pub struct VaultService<R, C> {
     repo: R,
     cipher: C,
-    _kdf: K,
 }
 
-impl<R, C, K> VaultService<R, C, K>
+impl<R, C> VaultService<R, C>
 where
     R: VaultRepository,
     C: CipherPort,
-    K: KeyDerivationPort,
 {
-    pub fn new(repo: R, cipher: C, kdf: K) -> Self {
-        Self {
-            repo,
-            cipher,
-            _kdf: kdf,
-        }
+    pub fn new(repo: R, cipher: C) -> Self {
+        Self { repo, cipher }
     }
 
     /// Create a new entry: validate the category, encrypt the password, persist.
@@ -198,7 +197,7 @@ where
     /// Update a category.
     ///
     /// - Recolors (name unchanged) apply directly.
-    /// - Renames require `confirmed`: an unconfirmed rename performs no write
+    /// - Renames require confirmation: an unconfirmed rename performs no write
     ///   and returns [`UpdateCategoryResult::RenamePreview`] with the affected
     ///   entry count; a confirmed rename cascades through one atomic
     ///   repository transaction.
@@ -207,7 +206,7 @@ where
         old_name: &str,
         new_name: &str,
         color: &str,
-        confirmed: bool,
+        confirmation: Confirmation,
     ) -> Result<UpdateCategoryResult, ServiceError> {
         if !is_valid_category_name(new_name) {
             return Err(ServiceError::BlankCategoryName);
@@ -222,7 +221,7 @@ where
             return Err(ServiceError::DuplicateCategory);
         }
         let category = Category::new(new_name.to_string(), color.to_string());
-        if old_name != new_name && !confirmed {
+        if old_name != new_name && confirmation == Confirmation::Pending {
             let affected_entries = self.repo.category_in_use(old_name)?;
             return Ok(UpdateCategoryResult::RenamePreview { affected_entries });
         }
@@ -266,7 +265,9 @@ mod tests {
     use secrecy::{ExposeSecret, SecretString};
 
     use super::*;
-    use crate::core::domain::entry::seed_categories;
+    use crate::core::application::gate::Confirmation;
+use crate::core::domain::entry::{seed_categories, EncryptedField};
+    use crate::core::ports::key_derivation::KeyDerivationPort;
 
     /// In-memory fake repository used to exercise the use cases without SQLite.
     /// Seeded with the four migration categories so entry validation is
@@ -422,35 +423,126 @@ mod tests {
         SecretString::from(s.to_string())
     }
 
-    /// Build a real crypto-backed service (KDF + cipher are provided by the
-    /// adapter) so the use cases are exercised against real crypto.
-    fn service() -> VaultService<FakeRepo, crate::adapters::crypto::argon2_aes::Argon2Aes, crate::adapters::crypto::argon2_aes::Argon2Aes>
-    {
-        VaultService::new(
-            FakeRepo::new(),
-            crate::adapters::crypto::argon2_aes::Argon2Aes,
-            crate::adapters::crypto::argon2_aes::Argon2Aes,
-        )
+    /// Key-derivation port fake: core unit tests must not pay real Argon2 cost
+    /// or import a concrete adapter (RUST-AUDIT F14).
+    struct FakeKdf;
+
+    impl KeyDerivationPort for FakeKdf {
+        fn random_salt(&self) -> Vec<u8> {
+            vec![7u8; 16]
+        }
+
+        fn derive(&self, password: SecretString, salt: &[u8]) -> Result<VaultKey, CryptoError> {
+            let mut bytes = [0u8; 32];
+            let pw = password.expose_secret().as_bytes();
+            for (i, slot) in bytes.iter_mut().enumerate() {
+                *slot = pw.get(i % pw.len().max(1)).copied().unwrap_or(0)
+                    ^ salt.get(i % salt.len().max(1)).copied().unwrap_or(0);
+            }
+            Ok(VaultKey::new(bytes))
+        }
+    }
+
+    /// Cipher port fake: reversible, binds the record id, and fails on a
+    /// tampered tag so failure paths stay exercisable.
+    struct FakeCipher;
+
+    impl CipherPort for FakeCipher {
+        fn encrypt(
+            &self,
+            id: &RecordId,
+            key: &VaultKey,
+            plaintext: SecretString,
+        ) -> Result<EncryptedField, CryptoError> {
+            let key_byte = key.expose_secret()[0];
+            let body: Vec<u8> = plaintext
+                .expose_secret()
+                .bytes()
+                .map(|b| b ^ key_byte)
+                .collect();
+            // Tag = checksum of the body plus the record id, so tampering with
+            // either is detected: a fake that accepts anything would hide a
+            // service that writes corrupted fields.
+            let checksum = body
+                .iter()
+                .fold(0u8, |acc, b| acc.wrapping_add(*b))
+                ^ id.as_bytes()[0];
+            let mut ciphertext = body;
+            ciphertext.extend([checksum ^ key_byte; 4]);
+            Ok(EncryptedField {
+                nonce: id.as_bytes()[..12].to_vec(),
+                ciphertext,
+            })
+        }
+
+        fn decrypt(
+            &self,
+            id: &RecordId,
+            key: &VaultKey,
+            field: &EncryptedField,
+        ) -> Result<SecretString, CryptoError> {
+            if field.nonce != id.as_bytes()[..12] || field.ciphertext.len() < 4 {
+                return Err(CryptoError::AuthenticationFailed);
+            }
+            let key_byte = key.expose_secret()[0];
+            let (body, tag) = field.ciphertext.split_at(field.ciphertext.len() - 4);
+            let checksum = body
+                .iter()
+                .fold(0u8, |acc, b| acc.wrapping_add(*b))
+                ^ id.as_bytes()[0];
+            if tag != [checksum ^ key_byte; 4] {
+                return Err(CryptoError::AuthenticationFailed);
+            }
+            let text: String = body.iter().map(|b| (b ^ key_byte) as char).collect();
+            Ok(SecretString::from(text))
+        }
+    }
+
+    /// Build the service over port fakes.
+    fn service() -> VaultService<FakeRepo, FakeCipher> {
+        VaultService::new(FakeRepo::new(), FakeCipher)
+    }
+
+    /// Derived key for the tests: same password and salt everywhere.
+    fn key() -> VaultKey {
+        FakeKdf
+            .derive(password("hunter2"), &[7u8; 16])
+            .expect("fake derivation cannot fail")
     }
 
     fn input(category: &str, site: &str, pwd: &str) -> EntryInput {
-        EntryInput::new(
-            site,
-            "https://example.com",
-            password(pwd),
-            "a@b.c",
-            "user",
-            category,
-        )
+        EntryInput {
+            site: site.to_string(),
+            link: "https://example.com".to_string(),
+            password: password(pwd),
+            email: "a@b.c".to_string(),
+            username: "user".to_string(),
+            category: category.to_string(),
+        }
+    }
+
+    #[test]
+    fn the_cipher_fake_refuses_a_tampered_field() {
+        // The fake must fail closed: a service that wrote a corrupted field has
+        // to surface a crypto error, not a wrong plaintext.
+        let key = key();
+        let rid = id(1);
+        let cipher = FakeCipher;
+        let mut field = cipher
+            .encrypt(&rid, &key, password("s3cret"))
+            .expect("encryption cannot fail");
+        field.ciphertext[0] ^= 0xff;
+
+        assert!(matches!(
+            cipher.decrypt(&rid, &key, &field).unwrap_err(),
+            CryptoError::AuthenticationFailed
+        ));
     }
 
     #[test]
     fn create_and_roundtrip_recovers_password() {
         let svc = service();
-        let key = svc
-            ._kdf
-            .derive(password("hunter2"), &[7u8; 16])
-            .unwrap();
+        let key = key();
         let rid = id(1);
         svc.create_entry(rid, &key, input("entretenimiento", "github", "s3cret"))
             .unwrap();
@@ -463,7 +555,7 @@ mod tests {
     #[test]
     fn update_of_missing_entry_is_not_found_and_writes_nothing() {
         let svc = service();
-        let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
+        let key = key();
         let err = svc
             .update_entry(id(9), &key, input("trabajo", "ghost", "p"))
             .unwrap_err();
@@ -477,7 +569,7 @@ mod tests {
         use std::sync::atomic::Ordering;
 
         let svc = service();
-        let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
+        let key = key();
         svc.create_entry(id(1), &key, input("trabajo", "github", "p"))
             .unwrap();
         svc.create_entry(id(2), &key, input("trabajo", "gitlab", "q"))
@@ -501,7 +593,7 @@ mod tests {
     #[test]
     fn details_of_missing_entry_is_not_found() {
         let svc = service();
-        let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
+        let key = key();
         let err = svc.get_entry_details(&id(9), &key).unwrap_err();
         assert!(matches!(err, ServiceError::NotFound));
     }
@@ -509,7 +601,7 @@ mod tests {
     #[test]
     fn rejects_entry_with_unknown_category_without_writing() {
         let svc = service();
-        let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
+        let key = key();
         let err = svc
             .create_entry(id(2), &key, input("custom-cat", "x", "y"))
             .unwrap_err();
@@ -521,7 +613,7 @@ mod tests {
     #[test]
     fn accepts_custom_repository_category_for_entries() {
         let svc = service();
-        let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
+        let key = key();
         // The repository now contains `lectura` (vault-entries "Accept a
         // repository-backed custom category"), so entries may use it.
         svc.create_category(&Category::new("lectura", "#8a4f7d"))
@@ -536,7 +628,7 @@ mod tests {
     #[test]
     fn filters_combine_conjunctively() {
         let svc = service();
-        let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
+        let key = key();
         svc.create_entry(id(3), &key, input("trabajo", "github", "a"))
             .unwrap();
         svc.create_entry(id(4), &key, input("estudio", "gitlab", "b"))
@@ -554,7 +646,7 @@ mod tests {
     #[test]
     fn delete_removes_record() {
         let svc = service();
-        let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
+        let key = key();
         svc.create_entry(id(5), &key, input("servicios", "site", "p"))
             .unwrap();
         svc.delete_entry(&id(5)).unwrap();
@@ -611,7 +703,7 @@ mod tests {
     fn recolor_applies_immediately_without_confirmation() {
         let svc = service();
         let result = svc
-            .update_category("trabajo", "trabajo", "#ad3a2d", false)
+            .update_category("trabajo", "trabajo", "#ad3a2d", Confirmation::Pending)
             .unwrap();
         assert_eq!(result, UpdateCategoryResult::Applied);
         let trabajo = svc
@@ -626,7 +718,7 @@ mod tests {
     #[test]
     fn unconfirmed_rename_previews_count_and_writes_nothing() {
         let svc = service();
-        let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
+        let key = key();
         // Three entries reference `trabajo`.
         for n in 1..=3 {
             svc.create_entry(id(n), &key, input("trabajo", &format!("site{n}"), "p"))
@@ -634,7 +726,7 @@ mod tests {
         }
 
         let result = svc
-            .update_category("trabajo", "laburo", "#ad3a2d", false)
+            .update_category("trabajo", "laburo", "#ad3a2d", Confirmation::Pending)
             .unwrap();
         assert_eq!(
             result,
@@ -662,14 +754,14 @@ mod tests {
     #[test]
     fn confirmed_rename_cascades_to_all_referencing_entries() {
         let svc = service();
-        let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
+        let key = key();
         for n in 1..=3 {
             svc.create_entry(id(n), &key, input("trabajo", &format!("site{n}"), "p"))
                 .unwrap();
         }
 
         let result = svc
-            .update_category("trabajo", "laburo", "#ad3a2d", true)
+            .update_category("trabajo", "laburo", "#ad3a2d", Confirmation::Confirmed)
             .unwrap();
         assert_eq!(result, UpdateCategoryResult::Applied);
 
@@ -686,7 +778,7 @@ mod tests {
     fn rename_to_existing_name_is_rejected_without_write() {
         let svc = service();
         let result = svc
-            .update_category("trabajo", "servicios", "#ad3a2d", true)
+            .update_category("trabajo", "servicios", "#ad3a2d", Confirmation::Confirmed)
             .unwrap_err();
         assert!(matches!(result, ServiceError::DuplicateCategory));
         // Both categories remain, unchanged.
@@ -697,7 +789,7 @@ mod tests {
     fn delete_category_refuses_in_use_and_last_category() {
         // In-use categories cannot be deleted.
         let svc = service();
-        let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
+        let key = key();
         svc.create_entry(id(7), &key, input("trabajo", "github", "p"))
             .unwrap();
         assert!(matches!(
