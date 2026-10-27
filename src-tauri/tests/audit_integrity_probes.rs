@@ -9,7 +9,7 @@ use tempfile::TempDir;
 
 use keymaps2026_lib::adapters::crypto::argon2_aes::Argon2Aes;
 use keymaps2026_lib::adapters::persistence::sqlite::SqliteVaultRepository;
-use keymaps2026_lib::core::domain::entry::{EntryRecord, RecordId};
+use keymaps2026_lib::core::domain::entry::{EntryRecord, Filters, RecordId};
 use keymaps2026_lib::core::ports::cipher::{CipherPort, VaultKey};
 use keymaps2026_lib::core::ports::key_derivation::KeyDerivationPort;
 use keymaps2026_lib::core::ports::vault_repository::{RepositoryError, VaultRepository};
@@ -85,6 +85,31 @@ fn f3_checkpoint_refuses_a_reader_blocked_partial_checkpoint() {
         ),
         other => panic!("blocked checkpoint must be refused, got {other:?}"),
     }
+}
+
+/// F3: a healthy WAL that actually holds frames must still checkpoint. The
+/// empty-WAL probes above short-circuit the `log >= 0` clause, so without this
+/// one a guard that misfires on a populated WAL would break every export.
+#[test]
+fn f3_checkpoint_succeeds_on_a_populated_wal() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("v.db");
+    let repo = SqliteVaultRepository::open(&path).unwrap();
+    let k = key();
+    save(&repo, &k, rid(1), "git");
+    save(&repo, &k, rid(2), "gitlab");
+
+    repo.checkpoint()
+        .expect("a healthy populated WAL must checkpoint");
+
+    // TRUNCATE leaves the WAL empty once every frame reached the main file.
+    let wal = dir.path().join("v.db-wal");
+    assert_eq!(
+        std::fs::metadata(&wal).map(|m| m.len()).unwrap_or(0),
+        0,
+        "a successful TRUNCATE checkpoint must leave an empty WAL"
+    );
+    assert_eq!(repo.list(&Filters::new()).unwrap().len(), 2);
 }
 
 /// F4: replacing `unsafe` + `from_utf8_unchecked` must not change rendering.

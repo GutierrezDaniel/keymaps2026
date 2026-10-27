@@ -273,10 +273,15 @@ impl From<ImportServiceError> for CommandError {
 
 /// True when an import failed before any vault file was touched: the candidate
 /// did not validate, so the active vault is still the one the session unlocked.
+///
+/// Only `InvalidVault` qualifies. `Open` and `Store` are stage-agnostic, so
+/// trusting them would make the relock decision depend on an invariant held in
+/// another file: today they come from the read-only candidate check, tomorrow
+/// one could come from the swap.
 fn is_validation_failure(error: &ImportServiceError) -> bool {
     matches!(
         error,
-        ImportServiceError::Storage(ImportStorageError::InvalidVault | ImportStorageError::Open(_))
+        ImportServiceError::Storage(ImportStorageError::InvalidVault)
     )
 }
 
@@ -1161,6 +1166,9 @@ mod tests {
     // Lock clears secrets (vault-session "Lock clears secrets").
     // -----------------------------------------------------------------------
 
+    // The companion `dropping_session_zeroizes_key_via_secret_drop` probe is
+    // gone: observing a dropped allocation needs `unsafe`. The drop-path
+    // guarantee belongs to `Secret`'s `Drop`, not to this crate's code.
     #[test]
     fn lock_zeroizes_session_key_bytes() {
         let mut session = Session::new(test_key());

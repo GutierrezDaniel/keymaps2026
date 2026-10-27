@@ -226,9 +226,12 @@ mod tests {
         assert_eq!(err, CryptoError::MalformedField);
     }
 
-    /// A valid UTF-8 plaintext round-trips through decrypt (the non-UTF-8
-    /// rejection branch is covered by the tampering tests, which cannot produce
-    /// a decryptable field without going around the cipher API).
+    /// A valid UTF-8 plaintext round-trips through decrypt.
+    ///
+    /// The non-UTF-8 rejection branch is *not* covered by any test: it needs a
+    /// field that authenticates but decodes to invalid UTF-8, which the cipher
+    /// API cannot produce (tampering fails authentication first). It is only
+    /// reachable from corrupted storage.
     #[test]
     fn decrypt_accepts_a_valid_utf8_round_trip() {
         let key = key_for(PASSWORD, &salt());
