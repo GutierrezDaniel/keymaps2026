@@ -235,6 +235,19 @@ pub(crate) mod tests {
         SecretString::from(s.to_string())
     }
 
+    /// The production scheduler must actually run the action. Expiry zero keeps
+    /// this deterministic: the worker signals immediately and the test blocks on
+    /// the channel instead of polling.
+    #[test]
+    fn the_thread_scheduler_runs_the_scheduled_action() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        thread_scheduler()(Duration::ZERO, Box::new(move || {
+            let _ = tx.send(());
+        }));
+        rx.recv_timeout(Duration::from_secs(5))
+            .expect("the scheduler must run the action");
+    }
+
     #[test]
     fn copy_places_value_on_clipboard() {
         let (clipboard, backend, scheduler) = fake();

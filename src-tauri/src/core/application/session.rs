@@ -30,22 +30,25 @@ impl Session {
     }
 
     /// The key this session unlocked with.
-    pub fn key(&self) -> &VaultKey {
+    ///
+    /// Crate-visible only: the interface adapter needs it to run an operation,
+    /// but the session key must not become part of the public API.
+    pub(crate) fn key(&self) -> &VaultKey {
         &self.key
     }
 
     /// Reset the activity clock (called on user activity).
-    pub fn touch(&mut self) {
+    pub(crate) fn touch(&mut self) {
         self.last_activity = Instant::now();
     }
 
     /// True when no activity happened for at least `timeout`.
-    pub fn is_expired(&self, timeout: Duration) -> bool {
+    pub(crate) fn is_expired(&self, timeout: Duration) -> bool {
         self.last_activity.elapsed() >= timeout
     }
 
     #[cfg(test)]
-    pub fn touch_at(&mut self, at: Instant) {
+    pub(crate) fn touch_at(&mut self, at: Instant) {
         self.last_activity = at;
     }
 }
@@ -161,13 +164,30 @@ mod tests {
     fn backoff_increases_after_limit() {
         let mut policy = BackoffPolicy::new();
         for _ in 0..5 {
-            policy.record_failure();
+            assert_eq!(policy.record_failure(), Duration::ZERO);
         }
-        assert_eq!(policy.record_failure(), Duration::from_secs(1));
-        assert_eq!(policy.record_failure(), Duration::from_secs(2));
-        assert_eq!(policy.record_failure(), Duration::from_secs(4));
-        assert_eq!(policy.record_failure(), Duration::from_secs(8));
-        assert_eq!(policy.record_failure(), Duration::from_secs(16));
+        // Doubling from 1s, capped at 60s, and it never wraps.
+        let expected = [1u64, 2, 4, 8, 16, 32, 60, 60];
+        for (i, secs) in expected.iter().enumerate() {
+            assert_eq!(
+                policy.record_failure(),
+                Duration::from_secs(*secs),
+                "failure {}",
+                i + 6
+            );
+        }
+        assert_eq!(policy.failure_count(), 13);
+    }
+
+    #[test]
+    fn activity_touch_restarts_the_expiry_window() {
+        let mut session = Session::new(test_key());
+        session.touch_at(Instant::now() - Duration::from_secs(600));
+        assert!(session.is_expired(Duration::from_secs(300)));
+
+        session.touch();
+
+        assert!(!session.is_expired(Duration::from_secs(300)));
     }
 
     #[test]
