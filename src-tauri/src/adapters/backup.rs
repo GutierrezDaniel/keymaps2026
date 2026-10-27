@@ -21,9 +21,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::adapters::persistence::sqlite::SqliteVaultRepository;
+use crate::core::application::gate::SessionGate;
 
 /// Backup-specific errors. Never carries secret material.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum BackupError {
     #[error("vault is locked; unlock before exporting")]
     Locked,
@@ -47,13 +49,13 @@ impl BackupService {
 
     /// Export the vault to `dest` in its native encrypted format.
     ///
-    /// `unlocked` is the session state reported by the command layer: a locked
+    /// `gate` is the session state reported by the command layer: a locked
     /// vault is refused up front (vault-backup "Safe export availability").
     ///
     /// On success `dest` holds a complete, valid vault database. On any error
     /// `dest` is left untouched and no temp file remains.
-    pub fn export(&self, unlocked: bool, dest: &Path) -> Result<(), BackupError> {
-        if !unlocked {
+    pub fn export(&self, gate: SessionGate, dest: &Path) -> Result<(), BackupError> {
+        if gate == SessionGate::Locked {
             return Err(BackupError::Locked);
         }
 
@@ -183,7 +185,7 @@ mod tests {
         let backup = BackupService::new(repo);
         let dest = dir.path().join("backup.db");
 
-        let err = backup.export(false, &dest).unwrap_err();
+        let err = backup.export(SessionGate::Locked, &dest).unwrap_err();
         assert_eq!(err, BackupError::Locked);
         assert!(!dest.exists(), "no backup may be produced while locked");
         assert!(!temp_sibling(&dest).exists(), "no temp file may remain");
@@ -196,7 +198,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let dest = dir.path().join("backup.db");
 
-        let err = backup.export(true, &dest).unwrap_err();
+        let err = backup.export(SessionGate::Unlocked, &dest).unwrap_err();
         assert_eq!(err, BackupError::NoVaultFile);
         assert!(!dest.exists());
     }
@@ -210,7 +212,7 @@ mod tests {
         // Destination inside a directory that does not exist: every write path
         // fails, and neither a partial backup nor a temp file may survive.
         let dest = dir.path().join("missing-dir").join("backup.db");
-        assert!(backup.export(true, &dest).is_err());
+        assert!(backup.export(SessionGate::Unlocked, &dest).is_err());
         assert!(!dest.exists(), "no partial backup may be reported as valid");
         assert!(!temp_sibling(&dest).exists(), "no temp file may remain");
     }
@@ -227,7 +229,7 @@ mod tests {
         let backup = BackupService::new(repo);
         let dest = dir.path().join("backup.db");
 
-        backup.export(true, &dest).unwrap();
+        backup.export(SessionGate::Unlocked, &dest).unwrap();
         assert!(dest.exists());
 
         // The exported file must be a real vault: reopen it as the source of a
@@ -268,7 +270,7 @@ mod tests {
         drop(source);
 
         let dest = dir.path().join("backup.db");
-        BackupService::new(repo).export(true, &dest).unwrap();
+        BackupService::new(repo).export(SessionGate::Unlocked, &dest).unwrap();
 
         let reopened = SqliteVaultRepository::open(&dest).unwrap();
         let exported: Vec<EncryptedField> = reopened
@@ -295,7 +297,7 @@ mod tests {
         // A previous backup (or any pre-existing file) occupies the path.
         fs::write(&dest, b"stale previous backup bytes").unwrap();
 
-        backup.export(true, &dest).unwrap();
+        backup.export(SessionGate::Unlocked, &dest).unwrap();
 
         // The destination now holds a complete, valid vault: stale bytes are
         // gone and the file reopens as an initialized repository.

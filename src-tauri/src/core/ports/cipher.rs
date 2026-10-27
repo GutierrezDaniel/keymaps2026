@@ -16,6 +16,7 @@ pub type VaultKey = Secret<[u8; 32]>;
 /// output can never leak secrets (see the vault-crypto "Crypto failure handling"
 /// requirement).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum CryptoError {
     #[error("key derivation failed")]
     KdfFailed,

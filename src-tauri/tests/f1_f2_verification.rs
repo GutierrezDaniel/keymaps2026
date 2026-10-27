@@ -45,14 +45,14 @@ fn record(id: u8, site: &str) -> EntryRecord {
 }
 
 fn input(site: &str, pwd: &str) -> EntryInput {
-    EntryInput::new(
-        site,
-        format!("https://{site}"),
-        SecretString::from(pwd.to_string()),
-        "a@b.c",
-        "u",
-        "servicios",
-    )
+    EntryInput {
+        site: site.to_string(),
+        link: format!("https://{site}"),
+        password: SecretString::from(pwd.to_string()),
+        email: "a@b.c".to_string(),
+        username: "u".to_string(),
+        category: "servicios".to_string(),
+    }
 }
 
 fn sibling(db: &Path, suffix: &str) -> PathBuf {
@@ -64,7 +64,7 @@ fn sibling(db: &Path, suffix: &str) -> PathBuf {
 fn service(
     dir: &Path,
 ) -> (
-    VaultService<SqliteVaultRepository, Argon2Aes, Argon2Aes>,
+    VaultService<SqliteVaultRepository, Argon2Aes>,
     VaultKey,
     PathBuf,
 ) {
@@ -82,7 +82,7 @@ fn service(
         )
         .unwrap();
     repo.init_vault(salt, &validation).unwrap();
-    (VaultService::new(repo, Argon2Aes, Argon2Aes), key, path)
+    (VaultService::new(repo, Argon2Aes), key, path)
 }
 
 fn sites(repo: &SqliteVaultRepository) -> Vec<String> {

@@ -11,6 +11,7 @@ use std::path::Path;
 /// Import-specific errors. Never carries secret material, paths, or file
 /// contents, so error output can never leak vault data.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum ImportStorageError {
     #[error("the selected file is not an initialized vault")]
     InvalidVault,

@@ -22,6 +22,7 @@ use keymaps2026_lib::core::domain::entry::{
 use keymaps2026_lib::core::ports::cipher::{CipherPort, CryptoError, VaultKey};
 use keymaps2026_lib::core::ports::key_derivation::KeyDerivationPort;
 use keymaps2026_lib::core::ports::vault_repository::{RepositoryError, VaultRepository};
+use keymaps2026_lib::core::application::gate::SessionGate;
 
 const MASTER_PASSWORD: &str = "correct horse battery staple";
 
@@ -668,7 +669,7 @@ fn backup_and_restore_preserve_seeded_and_custom_category_colors() {
 
     let dest = db.path.with_extension("backup.db");
     let backup = BackupService::new(std::sync::Arc::new(std::sync::Mutex::new(repo)));
-    backup.export(true, &dest).unwrap();
+    backup.export(SessionGate::Unlocked, &dest).unwrap();
 
     // Restore: the backup is a real vault; seeds keep exact colors, the custom
     // category and its references come back together.
