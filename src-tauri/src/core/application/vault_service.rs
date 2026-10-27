@@ -467,6 +467,14 @@ mod tests {
     }
 
     #[test]
+    fn details_of_missing_entry_is_not_found() {
+        let svc = service();
+        let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();
+        let err = svc.get_entry_details(&id(9), &key).unwrap_err();
+        assert!(matches!(err, ServiceError::NotFound));
+    }
+
+    #[test]
     fn rejects_entry_with_unknown_category_without_writing() {
         let svc = service();
         let key = svc._kdf.derive(password("hunter2"), &[7u8; 16]).unwrap();

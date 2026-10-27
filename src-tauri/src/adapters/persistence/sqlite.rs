@@ -199,10 +199,23 @@ impl SqliteVaultRepository {
     /// Force a WAL checkpoint so every committed transaction is present in the
     /// main database file. Required before copying the file as a backup:
     /// without it, recent writes could still live only in the `-wal` file.
+    ///
+    /// `PRAGMA wal_checkpoint` reports `(busy, log, checkpointed)` and does not
+    /// raise an error when it cannot finish, so the row is read and a
+    /// truncated copy is refused instead of silently exported.
     pub fn checkpoint(&self) -> Result<(), RepositoryError> {
-        self.conn
-            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+        let (busy, log, checkpointed): (i64, i64, i64) = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
             .map_err(store_err)?;
+        // -1 log/checkpointed means there is no WAL file to checkpoint.
+        if busy != 0 || (log >= 0 && checkpointed < log) {
+            return Err(RepositoryError::Store(format!(
+                "wal checkpoint incomplete: busy={busy}, log={log}, checkpointed={checkpointed}"
+            )));
+        }
         Ok(())
     }
 
@@ -369,9 +382,14 @@ impl SqliteVaultRepository {
 
     /// Restore the previous vault after a failed swap: close the failed
     /// installation's connection, remove its file, rename the rollback back
-    /// into place, and reopen it. Returns `cause` when restoration succeeds;
-    /// when it does not, the repository keeps an empty placeholder connection
-    /// so the app stays locked rather than serving a partial vault.
+    /// into place, and reopen it. Returns `cause` when restoration succeeds.
+    ///
+    /// When restoration itself fails the repository is left without a usable
+    /// connection: either the in-memory placeholder, or — when the close step
+    /// refused because statements were still active — the failed
+    /// installation's own connection. Either way the caller must relock, as
+    /// the Tauri layer does for every import error that is not a validation
+    /// failure (`tauri::VaultApp::import_backup`).
     fn restore_after_failed_swap(
         &mut self,
         db_path: &Path,
@@ -440,6 +458,19 @@ impl SqliteVaultRepository {
     }
 }
 
+/// Escape `LIKE` metacharacters so a literal search term cannot act as a
+/// wildcard: searching `100%` matches `100%`, not every row.
+fn escape_like(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for c in value.chars() {
+        if matches!(c, '%' | '_' | '\\') {
+            escaped.push('\\');
+        }
+        escaped.push(c);
+    }
+    escaped
+}
+
 /// Marker error for a stored record ID that is not exactly 16 bytes.
 #[derive(Debug)]
 struct RecordIdLengthError;
@@ -461,9 +492,11 @@ impl VaultRepository for SqliteVaultRepository {
         let mut clauses: Vec<&str> = Vec::new();
         let mut params: Vec<&dyn ToSql> = Vec::new();
         // Site search is a substring match (SQL LIKE, case-insensitive for
-        // ASCII); category and email filters are exact equality matches.
-        if let Some(site) = &filters.site {
-            clauses.push("site LIKE '%' || ? || '%'");
+        // ASCII); category and email filters are exact equality matches. The
+        // term is escaped so a literal `%` or `_` cannot act as a wildcard.
+        let like_site = filters.site.as_deref().map(escape_like);
+        if let Some(site) = &like_site {
+            clauses.push("site LIKE '%' || ? || '%' ESCAPE '\\'");
             params.push(site);
         }
         if let Some(category) = &filters.category {
@@ -796,7 +829,7 @@ mod tests {
     }
 
     #[test]
-    fn replace_with_backup_reports_the_failing_wal_swap_stage() {
+    fn replace_with_backup_installs_a_checkpointed_wal_vault() {
         let dir = TempDir::new().unwrap();
         let current_path = dir.path().join("current.db");
         let source_path = dir.path().join("source.db");
@@ -827,7 +860,7 @@ mod tests {
 
         current
             .replace_with_backup(&source_path)
-            .unwrap_or_else(|error| panic!("WAL replacement failed: {error:?}"));
+            .expect("replacement of a checkpointed WAL vault must succeed");
     }
 
     #[test]

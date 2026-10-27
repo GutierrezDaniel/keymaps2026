@@ -41,6 +41,7 @@ use crate::core::domain::entry::{
 use crate::core::ports::cipher::{CipherPort, CryptoError, VaultKey};
 use crate::core::ports::clipboard::{ClipboardError, ClipboardPort};
 use crate::core::ports::key_derivation::KeyDerivationPort;
+use crate::core::ports::vault_import_storage::ImportStorageError;
 use crate::core::ports::vault_repository::{RepositoryError, VaultRepository};
 
 /// Inactivity timeout: the session locks after 5 minutes without activity
@@ -270,6 +271,20 @@ impl From<ImportServiceError> for CommandError {
     }
 }
 
+/// True when an import failed before any vault file was touched: the candidate
+/// did not validate, so the active vault is still the one the session unlocked.
+///
+/// Only `InvalidVault` qualifies. `Open` and `Store` are stage-agnostic, so
+/// trusting them would make the relock decision depend on an invariant held in
+/// another file: today they come from the read-only candidate check, tomorrow
+/// one could come from the swap.
+fn is_validation_failure(error: &ImportServiceError) -> bool {
+    matches!(
+        error,
+        ImportServiceError::Storage(ImportStorageError::InvalidVault)
+    )
+}
+
 // ---------------------------------------------------------------------------
 // IPC DTOs (design "Interfaces / Contracts"). SecretString serializes as the
 // plaintext string the frontend needs (via `serialize_secret`, since secrecy
@@ -462,7 +477,6 @@ impl From<ImportResult> for ImportResultDto {
 // ---------------------------------------------------------------------------
 // Application state: one instance managed by the Tauri shell.
 // ---------------------------------------------------------------------------
-
 /// Makes a shared, mutex-guarded repository usable as a [`VaultRepository`]:
 /// the Tauri layer serializes all repository access through one `Mutex`.
 impl VaultRepository for Arc<Mutex<SqliteVaultRepository>> {
@@ -735,7 +749,19 @@ impl VaultApp {
         confirmed: bool,
     ) -> Result<ImportResult, CommandError> {
         self.require_unlocked()?;
-        let result = self.import.import(true, confirmed, source)?;
+        let result = match self.import.import(true, confirmed, source) {
+            Ok(result) => result,
+            Err(error) => {
+                // Only a validation failure provably leaves the vault files
+                // untouched. Any other storage failure may already have closed
+                // or replaced the active connection, so relock instead of
+                // serving a vault the adapter no longer controls.
+                if !is_validation_failure(&error) {
+                    self.lock();
+                }
+                return Err(error.into());
+            }
+        };
         if result == ImportResult::Applied {
             self.lock();
         }
@@ -1140,28 +1166,23 @@ mod tests {
     // Lock clears secrets (vault-session "Lock clears secrets").
     // -----------------------------------------------------------------------
 
+    // The companion `dropping_session_zeroizes_key_via_secret_drop` probe is
+    // gone: observing a dropped allocation needs `unsafe`. The drop-path
+    // guarantee belongs to `Secret`'s `Drop`, not to this crate's code.
     #[test]
     fn lock_zeroizes_session_key_bytes() {
         let mut session = Session::new(test_key());
-        let ptr = session.key.expose_secret().as_ptr();
+        assert_ne!(
+            session.key.expose_secret().as_slice(),
+            &[0u8; 32],
+            "the session must start holding a real key"
+        );
         session.zeroize();
-        let bytes = unsafe { std::slice::from_raw_parts(ptr, 32) };
-        assert_eq!(bytes, &[0u8; 32], "zeroized key bytes must be all zero");
-    }
-
-    #[test]
-    fn dropping_session_zeroizes_key_via_secret_drop() {
-        // Exercise the actual drop path lock uses: take, zeroize, drop.
-        let session = Session::new(test_key());
-        let mut boxed = Box::new(session);
-        let ptr = boxed.key.expose_secret().as_ptr();
-        unsafe {
-            std::ptr::drop_in_place(&mut *boxed);
-        }
-        // The allocation survives (we forget the box), so we can inspect it.
-        let bytes = unsafe { std::slice::from_raw_parts(ptr, 32) };
-        assert_eq!(bytes, &[0u8; 32], "dropped session key must be zeroized");
-        std::mem::forget(boxed);
+        assert_eq!(
+            session.key.expose_secret().as_slice(),
+            &[0u8; 32],
+            "zeroized session key bytes must be all zero"
+        );
     }
 
     #[test]
@@ -1528,6 +1549,39 @@ mod tests {
         app.lock();
         app.unlock(secret(MASTER_PASSWORD)).unwrap();
         assert!(!app.is_locked());
+    }
+
+    #[test]
+    fn import_storage_failure_relocks_instead_of_writing_to_a_broken_vault() {
+        let dir = TempDir::new().unwrap();
+        let backup_dir = TempDir::new().unwrap();
+        let backup = seeded_export(&backup_dir);
+
+        let app = file_app(&dir);
+        app.create_vault(secret(MASTER_PASSWORD)).unwrap();
+        app.unlock(secret(MASTER_PASSWORD)).unwrap();
+        app.create_entry(&entry_input("kept", "kept-secret")).unwrap();
+
+        // A directory in the stage path makes the staged copy fail *after* the
+        // candidate validated: a storage failure, not a validation failure.
+        std::fs::create_dir(dir.path().join("vault.db.import-stage")).unwrap();
+
+        assert_eq!(
+            app.import_backup(&backup, true).unwrap_err(),
+            CommandError::Import
+        );
+        // The failed restore may have left the adapter without a usable
+        // connection, so the session must not stay unlocked over it.
+        assert!(
+            app.is_locked(),
+            "a storage failure must relock instead of serving a broken vault"
+        );
+
+        // The current vault is intact and still authenticates.
+        app.unlock(secret(MASTER_PASSWORD)).unwrap();
+        let entries = app.list_entries(&Filters::new()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].site, "kept");
     }
 
     #[test]

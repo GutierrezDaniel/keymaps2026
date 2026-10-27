@@ -9,6 +9,8 @@
 //! The desktop shell (`tauri`) is compiled only when the `tauri-app` feature is
 //! enabled; see `Cargo.toml` for the rationale.
 
+#![forbid(unsafe_code)]
+
 pub mod adapters;
 pub mod core;
 

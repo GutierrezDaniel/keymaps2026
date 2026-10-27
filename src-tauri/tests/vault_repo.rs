@@ -186,6 +186,39 @@ fn save_list_update_delete_roundtrip() {
 }
 
 #[test]
+fn site_search_treats_like_metacharacters_as_literals() {
+    let repo = SqliteVaultRepository::open_in_memory().unwrap();
+    let key = test_key();
+    save(&repo, &key, rid(1), "100% cotton", "a");
+    save(&repo, &key, rid(2), "1000 sites", "b");
+    save(&repo, &key, rid(3), "under_score", "c");
+    save(&repo, &key, rid(4), "underXscore", "d");
+
+    // A literal `%` must not act as "match anything".
+    let hits = repo.list(&Filters::new().with_site("100%")).unwrap();
+    assert_eq!(hits.len(), 1, "literal '%' must not match every row");
+    assert_eq!(hits[0].site, "100% cotton");
+
+    // A literal `_` must not act as a single-character wildcard.
+    let hits = repo.list(&Filters::new().with_site("under_score")).unwrap();
+    assert_eq!(hits.len(), 1, "literal '_' must not match any character");
+    assert_eq!(hits[0].site, "under_score");
+
+    // A literal backslash is the ESCAPE character, so it must round-trip.
+    save(&repo, &key, rid(5), r"C:\Users\me", "e");
+    save(&repo, &key, rid(6), "C:/Users/me", "f");
+    let hits = repo.list(&Filters::new().with_site(r"C:\Users")).unwrap();
+    assert_eq!(hits.len(), 1, "a literal backslash must not escape");
+    assert_eq!(hits[0].site, r"C:\Users\me");
+    let hits = repo.list(&Filters::new().with_site("\\")).unwrap();
+    assert_eq!(hits.len(), 1, "a lone backslash must match only itself");
+
+    // Ordinary substring search is unchanged.
+    let hits = repo.list(&Filters::new().with_site("1000")).unwrap();
+    assert_eq!(hits.len(), 1);
+}
+
+#[test]
 fn list_without_filters_is_empty_on_fresh_db() {
     let repo = SqliteVaultRepository::open_in_memory().unwrap();
     assert!(repo.list(&Filters::new()).unwrap().is_empty());
@@ -300,14 +333,12 @@ fn records_and_metadata_survive_reopen() {
         assert!(repo.is_initialized().unwrap());
 
         // Persist entries encrypted under the vault key.
-        let a = save(&repo, &key, rid(1), "github", "gh-secret");
-        let b = save(&repo, &key, rid(2), "gitlab", "gl-secret");
+        save(&repo, &key, rid(1), "github", "gh-secret");
+        save(&repo, &key, rid(2), "gitlab", "gl-secret");
         assert_eq!(repo.list(&Filters::new()).unwrap().len(), 2);
 
         // Simulate a restart: drop the connection (repo goes out of scope).
         drop(repo);
-        // Keep the ciphertexts alive to prove identity across the restart.
-        let _ = (a.password.clone(), b.password.clone());
     }
 
     // Reopen the same file — a brand new process-level connection.

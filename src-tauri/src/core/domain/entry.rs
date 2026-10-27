@@ -30,10 +30,7 @@ impl RecordId {
 
 impl std::fmt::Display for RecordId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut s = [0u8; 32];
-        hex::encode_to_slice(self.0, &mut s).expect("32 hex chars fit in [u8; 32]");
-        // SAFETY: hex encoding produces only ASCII [0-9a-f], so this is valid UTF-8.
-        f.write_str(unsafe { std::str::from_utf8_unchecked(&s) })
+        f.write_str(&hex::encode(self.0))
     }
 }
 
