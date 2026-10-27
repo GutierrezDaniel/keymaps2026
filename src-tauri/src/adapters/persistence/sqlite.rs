@@ -212,6 +212,12 @@ impl SqliteVaultRepository {
             .map_err(store_err)?;
         // -1 log/checkpointed means there is no WAL file to checkpoint.
         if busy != 0 || (log >= 0 && checkpointed < log) {
+            crate::adapters::observability::Event::CheckpointIncomplete {
+                busy,
+                log,
+                checkpointed,
+            }
+            .emit();
             return Err(RepositoryError::Store(format!(
                 "wal checkpoint incomplete: busy={busy}, log={log}, checkpointed={checkpointed}"
             )));
