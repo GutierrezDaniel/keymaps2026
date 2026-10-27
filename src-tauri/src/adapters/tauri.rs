@@ -22,7 +22,7 @@
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rand::rngs::OsRng;
 use rand::RngCore;
@@ -35,6 +35,7 @@ use crate::adapters::crypto::argon2_aes::Argon2Aes;
 use crate::adapters::observability::{Event, ImportRejection, LockReason};
 use crate::adapters::persistence::sqlite::SqliteVaultRepository;
 use crate::core::application::gate::{Confirmation, SessionGate};
+use crate::core::application::session::{BackoffPolicy, Session};
 use crate::core::application::vault_import_service::{ImportResult, ImportServiceError, VaultImportService};
 use crate::core::application::vault_service::{ServiceError, UpdateCategoryResult, VaultService};
 use crate::core::domain::entry::{
@@ -59,112 +60,6 @@ const VALIDATION_ID: RecordId = RecordId([9; 16]);
 /// Plaintext marker encrypted as the validation record. Its successful
 /// decryption with the derived key proves the master password is correct.
 const VALIDATION_SECRET: &str = "vault-validation";
-
-/// A decrypted session: owns the derived vault key for the lifetime of the
-/// unlock. The key is a zeroizing [`Secret`]; dropping or explicitly
-/// zeroizing the session clears it from memory (vault-session "Lock clears
-/// secrets").
-pub struct Session {
-    key: VaultKey,
-    last_activity: Instant,
-}
-
-impl Session {
-    /// Start a session holding `key`, with its activity clock ticking now.
-    pub fn new(key: VaultKey) -> Self {
-        Self {
-            key,
-            last_activity: Instant::now(),
-        }
-    }
-
-    /// Reset the activity clock (called on user activity).
-    fn touch(&mut self) {
-        self.last_activity = Instant::now();
-    }
-
-    /// True when no activity happened for at least `timeout`.
-    fn is_expired(&self, timeout: Duration) -> bool {
-        self.last_activity.elapsed() >= timeout
-    }
-
-    #[cfg(test)]
-    fn touch_at(&mut self, at: Instant) {
-        self.last_activity = at;
-    }
-}
-
-impl Zeroize for Session {
-    fn zeroize(&mut self) {
-        // Replace the key with a zeroed one: dropping the previous `Secret`
-        // zeroizes its bytes (secrecy zeroizes on drop). Belt-and-suspenders
-        // on top of the same guarantee that runs when the session is dropped.
-        self.key = VaultKey::new([0u8; 32]);
-    }
-}
-
-/// Consecutive-failed-login backoff policy (vault-session "Bounded login
-/// attempts"): attempts below the limit are immediate, then delays grow 1, 2,
-/// 4, 8, 16 seconds and beyond, capped at 60s. A successful login resets.
-pub struct BackoffPolicy {
-    /// Maximum consecutive failures allowed before delays start (default 5).
-    max_failures: u32,
-    /// Current consecutive failure count.
-    failures: u32,
-    /// Upper bound for any delay, in seconds.
-    cap_secs: u64,
-}
-
-impl BackoffPolicy {
-    pub fn new() -> Self {
-        Self {
-            max_failures: 5,
-            failures: 0,
-            cap_secs: 60,
-        }
-    }
-
-    /// Configure the failure limit (spec: "configurable maximum").
-    pub fn with_max_failures(mut self, max_failures: u32) -> Self {
-        self.max_failures = max_failures;
-        self
-    }
-
-    pub fn failure_count(&self) -> u32 {
-        self.failures
-    }
-
-    /// Record a failed login and return the delay to enforce before the next
-    /// attempt.
-    pub fn record_failure(&mut self) -> Duration {
-        self.failures = self.failures.saturating_add(1);
-        self.delay_before_next_attempt()
-    }
-
-    /// A successful login resets the failure count (and thus the delays).
-    pub fn record_success(&mut self) {
-        self.failures = 0;
-    }
-
-    /// The delay to enforce before the next attempt: `0` while at or below the
-    /// limit, then doubling delays starting at 1 second, capped at
-    /// `cap_secs` (60).
-    pub fn delay_before_next_attempt(&self) -> Duration {
-        if self.failures <= self.max_failures {
-            return Duration::ZERO;
-        }
-        let n = self.failures - self.max_failures;
-        let exp = (n - 1).min(63);
-        let secs = 1u64.checked_shl(exp).unwrap_or(u64::MAX);
-        Duration::from_secs(secs.min(self.cap_secs))
-    }
-}
-
-impl Default for BackoffPolicy {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 /// Command-level errors. Serializes to the frontend; never carries secrets.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, thiserror::Error)]
@@ -858,7 +753,7 @@ impl VaultApp {
             guard
                 .as_ref()
                 .expect("require_unlocked guarantees a session")
-                .key
+                .key()
                 .clone()
         };
         f(&key)
@@ -1115,12 +1010,6 @@ mod tests {
 
     const MASTER_PASSWORD: &str = "correct horse battery staple";
 
-    fn test_key() -> VaultKey {
-        Argon2Aes
-            .derive(secret(MASTER_PASSWORD), &[7u8; 16])
-            .unwrap()
-    }
-
     fn app() -> VaultApp {
         let repo = SqliteVaultRepository::open_in_memory().unwrap();
         let clipboard = Clipboard::with_backend(Box::new(FakeClipboard::new()));
@@ -1164,86 +1053,6 @@ mod tests {
 
     fn rid(n: u8) -> RecordId {
         RecordId([n; 16])
-    }
-
-    // -----------------------------------------------------------------------
-    // Backoff policy (vault-session "Bounded login attempts").
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn backoff_allows_failures_up_to_limit() {
-        let mut policy = BackoffPolicy::new();
-        for _ in 0..5 {
-            assert_eq!(policy.record_failure(), Duration::ZERO);
-        }
-    }
-
-    #[test]
-    fn backoff_increases_after_limit() {
-        let mut policy = BackoffPolicy::new();
-        for _ in 0..5 {
-            policy.record_failure();
-        }
-        assert_eq!(policy.record_failure(), Duration::from_secs(1));
-        assert_eq!(policy.record_failure(), Duration::from_secs(2));
-        assert_eq!(policy.record_failure(), Duration::from_secs(4));
-        assert_eq!(policy.record_failure(), Duration::from_secs(8));
-        assert_eq!(policy.record_failure(), Duration::from_secs(16));
-    }
-
-    #[test]
-    fn backoff_caps_at_sixty_seconds() {
-        let mut policy = BackoffPolicy::new();
-        for _ in 0..12 {
-            policy.record_failure();
-        }
-        assert_eq!(policy.delay_before_next_attempt(), Duration::from_secs(60));
-        // Further failures stay capped.
-        policy.record_failure();
-        assert_eq!(policy.delay_before_next_attempt(), Duration::from_secs(60));
-    }
-
-    #[test]
-    fn backoff_resets_on_success() {
-        let mut policy = BackoffPolicy::new();
-        for _ in 0..7 {
-            policy.record_failure();
-        }
-        assert_eq!(policy.delay_before_next_attempt(), Duration::from_secs(2));
-        policy.record_success();
-        assert_eq!(policy.failure_count(), 0);
-        assert_eq!(policy.record_failure(), Duration::ZERO);
-    }
-
-    #[test]
-    fn backoff_limit_is_configurable() {
-        let mut policy = BackoffPolicy::new().with_max_failures(2);
-        assert_eq!(policy.record_failure(), Duration::ZERO);
-        assert_eq!(policy.record_failure(), Duration::ZERO);
-        assert_eq!(policy.record_failure(), Duration::from_secs(1));
-    }
-
-    // -----------------------------------------------------------------------
-    // Lock clears secrets (vault-session "Lock clears secrets").
-    // -----------------------------------------------------------------------
-
-    // The companion `dropping_session_zeroizes_key_via_secret_drop` probe is
-    // gone: observing a dropped allocation needs `unsafe`. The drop-path
-    // guarantee belongs to `Secret`'s `Drop`, not to this crate's code.
-    #[test]
-    fn lock_zeroizes_session_key_bytes() {
-        let mut session = Session::new(test_key());
-        assert_ne!(
-            session.key.expose_secret().as_slice(),
-            &[0u8; 32],
-            "the session must start holding a real key"
-        );
-        session.zeroize();
-        assert_eq!(
-            session.key.expose_secret().as_slice(),
-            &[0u8; 32],
-            "zeroized session key bytes must be all zero"
-        );
     }
 
     // -- operational trail (RUST-AUDIT F9) ----------------------------------
