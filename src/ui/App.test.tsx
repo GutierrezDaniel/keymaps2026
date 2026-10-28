@@ -246,24 +246,17 @@ describe("App — login and backoff", () => {
 });
 
 describe("App — vault creation", () => {
-  it("switches to the create screen with its warning when the vault is not initialized", async () => {
+  it("opens the create screen on first run without asking for a password", async () => {
     mockRoutes({
       list: () => {
-        throw "Locked";
-      },
-      unlock: () => {
         throw "VaultNotInitialized";
       },
     });
     render(<App />);
-    await screen.findByLabelText("Contraseña maestra");
 
-    fireEvent.change(screen.getByLabelText("Contraseña maestra"), {
-      target: { value: "anything" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Desbloquear" }));
-
+    // Straight to create: no unlock form, because no password can exist yet.
     expect(await screen.findByLabelText("Nueva contraseña maestra")).toBeTruthy();
+    expect(screen.queryByLabelText("Contraseña maestra")).toBeNull();
     expect(screen.getByText(/pérdida irreversible/i)).toBeTruthy();
     expect(screen.getByText(/no existe ningún mecanismo de recuperación/i)).toBeTruthy();
   });
