@@ -135,6 +135,26 @@ Neither defect is a crash. Both are silent: they produce a wrong state and keep 
 | 8 — config | No `env::var`, no global mutable state; `main.rs` → `desktop::run` is a thin composition root; constants are documented. |
 | 9 — decision gates | Constructors ≤3 params except F12; `dyn SystemClipboard` exists only as a test seam; hand-written `FakeClipboard`, no `mockall`; `RecordId` is parsed at the command edge (`tauri.rs:900,922,929,977`); SQL fully parameterized. |
 
+## Dependency advisories (2026-10-28)
+
+`cargo audit` over the 496 crates in `Cargo.lock`: **no vulnerabilities**, seven
+informational warnings, all upstream-blocked.
+
+| Crate | Kind | Pulled in by | Fix |
+|---|---|---|---|
+| `glib` 0.18.5 | unsound (`RUSTSEC-2024-0429`) | `gtk` 0.18 ← `tao` / `muda` / `tauri` | needs gtk-rs 0.20, i.e. a Tauri release that moves the whole stack. Not fixable here: `glib` 0.20 cannot compile against `gtk` 0.18. |
+| `proc-macro-error` 1.0.4 | unmaintained | tauri toolchain | upstream |
+| `unic-char-property`, `unic-char-range`, `unic-common`, `unic-ucd-ident`, `unic-ucd-version` | unmaintained | `uriparse` ← tauri | upstream |
+
+Fixed while investigating: `tokio` 1.53.1 → 1.54.1 (unsound `AsyncFd`,
+`RUSTSEC-2026-0386`, patched in `>= 1.53.3`) and `clipboard-win` 5.4.1 → 5.4.3
+(the locked version was yanked).
+
+Why this is not a `--deny warnings` gate: eight of the nine findings were
+upstream-blocked, so the flag would have required a permanent ignore list that
+says nothing. The gate that matters is vulnerabilities, which `cargo audit`
+already fails on.
+
 ## Not covered / open questions
 
 - ~~CI runs `npm test` and `cargo test --lib` only.~~ Closed: `.github/workflows/checks.yml` runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (all targets), `cargo check --features tauri-app`, and the frontend type-check plus tests on every PR and push to main; `cargo audit` runs weekly, because the advisory database changes without any push. The release workflow keeps its own gates.
