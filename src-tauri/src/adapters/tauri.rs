@@ -741,6 +741,13 @@ impl VaultApp {
     /// acquisition panic (independent verification, PR #32).
     fn session_key(&self) -> Result<VaultKey, CommandError> {
         self.check_auto_lock();
+        // A vault that was never created cannot be "locked": report that
+        // instead of asking for a password nobody has set. Without this
+        // distinction the first run shows an unlock screen and only reveals the
+        // create screen after a failed attempt.
+        if !self.repo.lock().unwrap().is_initialized()? {
+            return Err(CommandError::VaultNotInitialized);
+        }
         let mut guard = self.session.lock().unwrap();
         match guard.as_mut() {
             Some(session) => {
@@ -1211,6 +1218,25 @@ mod tests {
     }
 
     #[test]
+    fn a_fresh_vault_reports_not_initialized_instead_of_locked() {
+        // First run: no vault exists yet, so no command may answer "Locked" —
+        // that is what made the UI ask for a password before offering to create.
+        let app = app();
+        assert_eq!(
+            app.list_entries(&Filters::new()).unwrap_err(),
+            CommandError::VaultNotInitialized
+        );
+        assert!(app.is_locked(), "there is still no session");
+
+        // Once created, the same command reports the real reason.
+        app.create_vault(secret(MASTER_PASSWORD)).unwrap();
+        assert_eq!(
+            app.list_entries(&Filters::new()).unwrap_err(),
+            CommandError::Locked
+        );
+    }
+
+    #[test]
     fn app_lock_clears_session() {
         let app = unlocked_app();
         assert!(!app.is_locked());
@@ -1449,10 +1475,12 @@ mod tests {
         let app = file_app(&dir);
         let dest = dir.path().join("backup.db");
 
+        // A vault that exists but has no session: that is what "locked" means
+        // (a vault that was never created reports VaultNotInitialized instead).
+        app.create_vault(secret(MASTER_PASSWORD)).unwrap();
         assert_eq!(app.export_backup(&dest).unwrap_err(), CommandError::Locked);
         assert!(!dest.exists());
 
-        app.create_vault(secret(MASTER_PASSWORD)).unwrap();
         app.unlock(secret(MASTER_PASSWORD)).unwrap();
         app.export_backup(&dest).unwrap();
         assert!(dest.exists());
@@ -1729,6 +1757,8 @@ mod tests {
     #[test]
     fn category_commands_are_gated_by_unlocked_session() {
         let app = app();
+        // The gate under test is the session, not initialization.
+        app.create_vault(secret(MASTER_PASSWORD)).unwrap();
         assert_eq!(app.list_categories().unwrap_err(), CommandError::Locked);
         assert_eq!(
             app.create_category(&Category::new("lectura", "#8a4f7d"))

@@ -126,8 +126,9 @@ export default function App() {
     };
   }, []);
 
-  // Boot: determine the initial screen. A fresh vault reports "Locked" from
-  // list (no session); unlock then reveals VaultNotInitialized → create.
+  // Boot: determine the initial screen. A fresh vault answers
+  // VaultNotInitialized, so the first screen is "create" — asking for a password
+  // that does not exist yet was the old behaviour.
   useEffect(() => {
     let cancelled = false;
     api
@@ -142,7 +143,10 @@ export default function App() {
       .catch((raw) => {
         if (cancelled) return;
         const commandError = toCommandError(raw);
-        if (commandError.kind === "Locked") {
+        if (commandError.kind === "VaultNotInitialized") {
+          // First run: there is no vault, so there is nothing to unlock.
+          setPhase("create");
+        } else if (commandError.kind === "Locked") {
           setPhase("locked");
         } else {
           setError(spanishMessage(commandError));
