@@ -144,17 +144,24 @@ mod tests {
         let storage = FakeStorage::new(true, true);
         let service = VaultImportService::new(&storage);
         assert!(matches!(
-            service.import(SessionGate::Locked, Confirmation::Confirmed, &source()).unwrap_err(),
+            service
+                .import(SessionGate::Locked, Confirmation::Confirmed, &source())
+                .unwrap_err(),
             ImportServiceError::Locked
         ));
-        assert!(calls(&storage).is_empty(), "locked import must not touch storage");
+        assert!(
+            calls(&storage).is_empty(),
+            "locked import must not touch storage"
+        );
     }
 
     #[test]
     fn preview_validates_and_writes_nothing() {
         let storage = FakeStorage::new(true, true);
         let service = VaultImportService::new(&storage);
-        let result = service.import(SessionGate::Unlocked, Confirmation::Pending, &source()).unwrap();
+        let result = service
+            .import(SessionGate::Unlocked, Confirmation::Pending, &source())
+            .unwrap();
         assert_eq!(result, ImportResult::ConfirmationRequired);
         assert_eq!(
             calls(&storage),
@@ -168,12 +175,16 @@ mod tests {
         let storage = FakeStorage::new(false, true);
         let service = VaultImportService::new(&storage);
         assert!(matches!(
-            service.import(SessionGate::Unlocked, Confirmation::Pending, &source()).unwrap_err(),
+            service
+                .import(SessionGate::Unlocked, Confirmation::Pending, &source())
+                .unwrap_err(),
             ImportServiceError::Storage(ImportStorageError::InvalidVault)
         ));
         // Confirmed imports also revalidate: an invalid candidate is refused
         // even when the caller claims confirmation.
-        let err = service.import(SessionGate::Unlocked, Confirmation::Confirmed, &source()).unwrap_err();
+        let err = service
+            .import(SessionGate::Unlocked, Confirmation::Confirmed, &source())
+            .unwrap_err();
         assert!(matches!(err, ImportServiceError::Storage(_)));
         assert_eq!(
             calls(&storage),
@@ -186,7 +197,9 @@ mod tests {
     fn confirmed_import_revalidates_then_applies() {
         let storage = FakeStorage::new(true, true);
         let service = VaultImportService::new(&storage);
-        let result = service.import(SessionGate::Unlocked, Confirmation::Confirmed, &source()).unwrap();
+        let result = service
+            .import(SessionGate::Unlocked, Confirmation::Confirmed, &source())
+            .unwrap();
         assert_eq!(result, ImportResult::Applied);
         assert_eq!(
             calls(&storage),
@@ -199,7 +212,9 @@ mod tests {
     fn storage_failure_returns_error_without_reporting_success() {
         let storage = FakeStorage::new(true, false);
         let service = VaultImportService::new(&storage);
-        let err = service.import(SessionGate::Unlocked, Confirmation::Confirmed, &source()).unwrap_err();
+        let err = service
+            .import(SessionGate::Unlocked, Confirmation::Confirmed, &source())
+            .unwrap_err();
         assert!(matches!(err, ImportServiceError::Storage(_)));
         assert_eq!(calls(&storage), vec!["validate", "replace"]);
     }

@@ -92,10 +92,7 @@ impl Clipboard {
 
     /// Build an adapter whose clears run when the test says so.
     #[cfg(test)]
-    pub(crate) fn with_scheduler(
-        backend: Box<dyn SystemClipboard>,
-        scheduler: Scheduler,
-    ) -> Self {
+    pub(crate) fn with_scheduler(backend: Box<dyn SystemClipboard>, scheduler: Scheduler) -> Self {
         Self {
             inner: Arc::new(Mutex::new(backend)),
             scheduler,
@@ -111,21 +108,24 @@ impl ClipboardPort for Clipboard {
         self.inner.lock().unwrap().set_text(&copied)?;
 
         let inner = Arc::clone(&self.inner);
-        (self.scheduler)(expiry, Box::new(move || {
-            let mut guard = inner.lock().unwrap();
-            // Conditional clear: only wipe when the current clipboard content is
-            // still the value we placed there.
-            // The clipboard content read back is the secret we placed there:
-            // compare it inside a zeroizing wrapper so the comparison does not
-            // leave a plaintext copy behind (RUST-AUDIT F10).
-            let unchanged = match guard.get_text() {
-                Ok(current) => Zeroizing::new(current).as_str() == copied.as_str(),
-                Err(_) => false,
-            };
-            if unchanged {
-                let _ = guard.clear();
-            }
-        }));
+        (self.scheduler)(
+            expiry,
+            Box::new(move || {
+                let mut guard = inner.lock().unwrap();
+                // Conditional clear: only wipe when the current clipboard content is
+                // still the value we placed there.
+                // The clipboard content read back is the secret we placed there:
+                // compare it inside a zeroizing wrapper so the comparison does not
+                // leave a plaintext copy behind (RUST-AUDIT F10).
+                let unchanged = match guard.get_text() {
+                    Ok(current) => Zeroizing::new(current).as_str() == copied.as_str(),
+                    Err(_) => false,
+                };
+                if unchanged {
+                    let _ = guard.clear();
+                }
+            }),
+        );
         Ok(())
     }
 }
@@ -180,10 +180,7 @@ pub(crate) mod tests {
         }
 
         fn get_text(&mut self) -> Result<String, ClipboardError> {
-            if self
-                .reads_fail
-                .load(std::sync::atomic::Ordering::SeqCst)
-            {
+            if self.reads_fail.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err(ClipboardError::Access("fake backend unavailable".into()));
             }
             Ok(self.state.lock().unwrap().clone().unwrap_or_default())
@@ -197,9 +194,12 @@ pub(crate) mod tests {
 
     /// Captures the scheduled clear instead of waiting for it, so the timing
     /// tests are deterministic: they fire the clear when the scenario says so.
+    /// A clear the test scheduler captured instead of running.
+    type PendingClear = (Duration, Box<dyn FnOnce() + Send>);
+
     #[derive(Clone, Default)]
     struct ManualScheduler {
-        pending: Arc<Mutex<Vec<(Duration, Box<dyn FnOnce() + Send>)>>>,
+        pending: Arc<Mutex<Vec<PendingClear>>>,
     }
 
     impl ManualScheduler {
@@ -226,8 +226,7 @@ pub(crate) mod tests {
     fn fake() -> (Clipboard, FakeClipboard, ManualScheduler) {
         let backend = FakeClipboard::new();
         let scheduler = ManualScheduler::default();
-        let clipboard =
-            Clipboard::with_scheduler(Box::new(backend.clone()), scheduler.scheduler());
+        let clipboard = Clipboard::with_scheduler(Box::new(backend.clone()), scheduler.scheduler());
         (clipboard, backend, scheduler)
     }
 
@@ -241,9 +240,12 @@ pub(crate) mod tests {
     #[test]
     fn the_thread_scheduler_runs_the_scheduled_action() {
         let (tx, rx) = std::sync::mpsc::channel();
-        thread_scheduler()(Duration::ZERO, Box::new(move || {
-            let _ = tx.send(());
-        }));
+        thread_scheduler()(
+            Duration::ZERO,
+            Box::new(move || {
+                let _ = tx.send(());
+            }),
+        );
         rx.recv_timeout(Duration::from_secs(5))
             .expect("the scheduler must run the action");
     }
@@ -273,7 +275,10 @@ pub(crate) mod tests {
 
         scheduler.run_pending();
 
-        assert!(backend.current().is_none(), "clipboard must clear after expiry");
+        assert!(
+            backend.current().is_none(),
+            "clipboard must clear after expiry"
+        );
     }
 
     /// The clear must never destroy a newer clipboard copy (design: "avoids

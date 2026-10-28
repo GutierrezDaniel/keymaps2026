@@ -127,8 +127,10 @@ impl SqliteVaultRepository {
     fn from_conn(conn: Connection) -> Result<Self, RepositoryError> {
         // WAL + FULL synchronous keeps committed transactions durable on a
         // desktop app while allowing the future backup command to read safely.
-        conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;")
-            .map_err(store_err)?;
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON;",
+        )
+        .map_err(store_err)?;
         migrate(&conn)?;
         Ok(Self { conn, path: None })
     }
@@ -311,18 +313,14 @@ impl SqliteVaultRepository {
             .write(true)
             .open(&stage)
             .map_err(|e| io_err_at("stage open", e))?;
-        staged
-            .sync_all()
-            .map_err(|e| io_err_at("stage sync", e))?;
+        staged.sync_all().map_err(|e| io_err_at("stage sync", e))?;
         drop(staged);
 
         // 2. Revalidate the staged bytes before touching the vault (guards
         //    against the selected file changing between preview and confirm).
         if let Err(e) = Self::validate_backup(&stage) {
             let _ = fs::remove_file(&stage);
-            return Err(RepositoryError::Store(format!(
-                "stage validation: {e}"
-            )));
+            return Err(RepositoryError::Store(format!("stage validation: {e}")));
         }
 
         // 3. Checkpoint so every committed write lives in the main file, then
@@ -615,8 +613,9 @@ impl VaultRepository for SqliteVaultRepository {
                 })
             })
             .map_err(store_err)?;
-        let mut categories: Vec<Category> =
-            rows.collect::<rusqlite::Result<Vec<_>>>().map_err(store_err)?;
+        let mut categories: Vec<Category> = rows
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(store_err)?;
         // Deterministic order: case-normalized name ascending, exact name as
         // the tie-breaker (category-administration "Resolve ordering ties").
         categories.sort_by(|a, b| {
@@ -837,7 +836,10 @@ mod tests {
         let cause = RepositoryError::Store("swap failed".into());
         let err = repo.restore_after_failed_swap(&path, &rollback, cause.clone());
         assert_eq!(err, Err(cause), "restore must surface the original failure");
-        assert!(!rollback.exists(), "rollback file must be consumed by the restore");
+        assert!(
+            !rollback.exists(),
+            "rollback file must be consumed by the restore"
+        );
         assert_eq!(
             fs::read(&path).unwrap(),
             original,

@@ -36,7 +36,9 @@ use crate::adapters::observability::{Event, ImportRejection, LockReason};
 use crate::adapters::persistence::sqlite::SqliteVaultRepository;
 use crate::core::application::gate::{Confirmation, SessionGate};
 use crate::core::application::session::{BackoffPolicy, Session};
-use crate::core::application::vault_import_service::{ImportResult, ImportServiceError, VaultImportService};
+use crate::core::application::vault_import_service::{
+    ImportResult, ImportServiceError, VaultImportService,
+};
 use crate::core::application::vault_service::{ServiceError, UpdateCategoryResult, VaultService};
 use crate::core::domain::entry::{
     Category, EntryDetails, EntryInput, EntryRecord, EntrySummary, Filters, RecordId,
@@ -63,6 +65,7 @@ const VALIDATION_SECRET: &str = "vault-validation";
 
 /// Command-level errors. Serializes to the frontend; never carries secrets.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, thiserror::Error)]
+#[non_exhaustive]
 pub enum CommandError {
     #[error("vault is locked")]
     Locked,
@@ -675,26 +678,27 @@ impl VaultApp {
         confirmed: bool,
     ) -> Result<ImportResult, CommandError> {
         self.require_unlocked()?;
-        let result = match self
-            .import
-            .import(SessionGate::Unlocked, Confirmation::from(confirmed), source)
-        {
-            Ok(result) => result,
-            Err(error) => {
-                // Only a validation failure provably leaves the vault files
-                // untouched. Any other storage failure may already have closed
-                // or replaced the active connection, so relock instead of
-                // serving a vault the adapter no longer controls.
-                let reason = if is_validation_failure(&error) {
-                    ImportRejection::InvalidCandidate
-                } else {
-                    self.lock_with(LockReason::Import);
-                    ImportRejection::StorageFailure
-                };
-                Event::ImportRejected { reason }.emit();
-                return Err(error.into());
-            }
-        };
+        let result =
+            match self
+                .import
+                .import(SessionGate::Unlocked, Confirmation::from(confirmed), source)
+            {
+                Ok(result) => result,
+                Err(error) => {
+                    // Only a validation failure provably leaves the vault files
+                    // untouched. Any other storage failure may already have closed
+                    // or replaced the active connection, so relock instead of
+                    // serving a vault the adapter no longer controls.
+                    let reason = if is_validation_failure(&error) {
+                        ImportRejection::InvalidCandidate
+                    } else {
+                        self.lock_with(LockReason::Import);
+                        ImportRejection::StorageFailure
+                    };
+                    Event::ImportRejected { reason }.emit();
+                    return Err(error.into());
+                }
+            };
         if result == ImportResult::Applied {
             self.lock_with(LockReason::Import);
             Event::ImportApplied.emit();
@@ -727,12 +731,21 @@ impl VaultApp {
     /// Gate a command on an unlocked, non-expired session, touching the
     /// activity clock on success.
     fn require_unlocked(&self) -> Result<(), CommandError> {
+        self.session_key().map(|_| ())
+    }
+
+    /// The session key, or `Locked`.
+    ///
+    /// One acquisition: checking "is it unlocked" and then taking the key in a
+    /// second one left a window where a concurrent `lock()` made the second
+    /// acquisition panic (independent verification, PR #32).
+    fn session_key(&self) -> Result<VaultKey, CommandError> {
         self.check_auto_lock();
         let mut guard = self.session.lock().unwrap();
         match guard.as_mut() {
             Some(session) => {
                 session.touch();
-                Ok(())
+                Ok(session.key().clone())
             }
             None => Err(CommandError::Locked),
         }
@@ -743,19 +756,11 @@ impl VaultApp {
         &self,
         f: impl FnOnce(&VaultKey) -> Result<T, CommandError>,
     ) -> Result<T, CommandError> {
-        self.require_unlocked()?;
-        // Copy the key out and release the session mutex before running the
-        // operation: the guard used to be held across the crypto/database work,
-        // which blocked auto-lock, activity updates and `lock()` for its whole
-        // duration. The copy is a zeroizing secret dropped when this returns.
-        let key = {
-            let guard = self.session.lock().unwrap();
-            guard
-                .as_ref()
-                .expect("require_unlocked guarantees a session")
-                .key()
-                .clone()
-        };
+        // The key is copied out and the session mutex released before the work
+        // runs: holding it blocked auto-lock, activity updates and `lock()` for
+        // the whole operation. The copy is a zeroizing secret dropped with this
+        // call.
+        let key = self.session_key()?;
         f(&key)
     }
 }
@@ -969,7 +974,9 @@ fn record_activity(state: tauri::State<'_, Arc<VaultApp>>) -> Result<(), Command
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn list_categories(state: tauri::State<'_, Arc<VaultApp>>) -> Result<Vec<CategoryDto>, CommandError> {
+fn list_categories(
+    state: tauri::State<'_, Arc<VaultApp>>,
+) -> Result<Vec<CategoryDto>, CommandError> {
     let categories = state.list_categories()?;
     Ok(categories.into_iter().map(CategoryDto::from).collect())
 }
@@ -994,7 +1001,10 @@ fn update_category(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-fn delete_category(state: tauri::State<'_, Arc<VaultApp>>, name: String) -> Result<(), CommandError> {
+fn delete_category(
+    state: tauri::State<'_, Arc<VaultApp>>,
+    name: String,
+) -> Result<(), CommandError> {
     state.delete_category(&name)
 }
 
@@ -1194,7 +1204,10 @@ mod tests {
         release.send(()).unwrap();
         worker.join().unwrap().unwrap();
         locker.join().unwrap();
-        assert!(app.is_locked(), "a finished operation must not revive the session");
+        assert!(
+            app.is_locked(),
+            "a finished operation must not revive the session"
+        );
     }
 
     #[test]
@@ -1329,8 +1342,12 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, id);
 
-        app.update_entry(&id, entry_input("github", "new-secret")).unwrap();
-        assert_eq!(app.get_entry_details(&id).unwrap().password.expose_secret(), "new-secret");
+        app.update_entry(&id, entry_input("github", "new-secret"))
+            .unwrap();
+        assert_eq!(
+            app.get_entry_details(&id).unwrap().password.expose_secret(),
+            "new-secret"
+        );
 
         app.delete_entry(&id).unwrap();
         assert!(app.list_entries(&Filters::new()).unwrap().is_empty());
@@ -1395,9 +1412,7 @@ mod tests {
     #[test]
     fn copy_field_places_password_and_metadata() {
         let (app, fake) = unlocked_app_with_clipboard();
-        let id = app
-            .create_entry(entry_input("github", "s3cr3t"))
-            .unwrap();
+        let id = app.create_entry(entry_input("github", "s3cr3t")).unwrap();
 
         app.copy_field(&id, CopyField::Password).unwrap();
         assert_eq!(fake.current().as_deref(), Some("s3cr3t"));
@@ -1417,7 +1432,11 @@ mod tests {
             app.copy_field(&rid(1), CopyField::Password).unwrap_err(),
             CommandError::Locked
         );
-        assert_eq!(fake.current(), None, "no secret may reach the clipboard while locked");
+        assert_eq!(
+            fake.current(),
+            None,
+            "no secret may reach the clipboard while locked"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1572,7 +1591,8 @@ mod tests {
         let app = file_app(&dir);
         app.create_vault(secret(MASTER_PASSWORD)).unwrap();
         app.unlock(secret(MASTER_PASSWORD)).unwrap();
-        app.create_entry(entry_input("kept", "kept-secret")).unwrap();
+        app.create_entry(entry_input("kept", "kept-secret"))
+            .unwrap();
 
         // A directory in the stage path makes the staged copy fail *after* the
         // candidate validated: a storage failure, not a validation failure.
@@ -1618,10 +1638,9 @@ mod tests {
 
     #[test]
     fn import_result_dto_serializes_as_tagged_enum() {
-        let preview = serde_json::to_value(ImportResultDto::from(
-            ImportResult::ConfirmationRequired,
-        ))
-        .unwrap();
+        let preview =
+            serde_json::to_value(ImportResultDto::from(ImportResult::ConfirmationRequired))
+                .unwrap();
         assert_eq!(
             preview,
             serde_json::json!({ "status": "confirmation_required" })
@@ -1693,7 +1712,12 @@ mod tests {
         }
     }
 
-    fn update_request(old_name: &str, new_name: &str, color: &str, confirmed: bool) -> UpdateCategoryRequest {
+    fn update_request(
+        old_name: &str,
+        new_name: &str,
+        color: &str,
+        confirmed: bool,
+    ) -> UpdateCategoryRequest {
         UpdateCategoryRequest {
             old_name: old_name.to_string(),
             new_name: new_name.to_string(),
@@ -1716,7 +1740,10 @@ mod tests {
                 .unwrap_err(),
             CommandError::Locked
         );
-        assert_eq!(app.delete_category("trabajo").unwrap_err(), CommandError::Locked);
+        assert_eq!(
+            app.delete_category("trabajo").unwrap_err(),
+            CommandError::Locked
+        );
     }
 
     #[test]
@@ -1730,10 +1757,14 @@ mod tests {
             .into_iter()
             .map(|c| c.name)
             .collect();
-        assert_eq!(names, ["entretenimiento", "estudio", "servicios", "trabajo"]);
+        assert_eq!(
+            names,
+            ["entretenimiento", "estudio", "servicios", "trabajo"]
+        );
 
         // Create a custom category and see it listed.
-        app.create_category(&Category::new("lectura", "#8a4f7d")).unwrap();
+        app.create_category(&Category::new("lectura", "#8a4f7d"))
+            .unwrap();
         assert!(app
             .list_categories()
             .unwrap()
@@ -1784,7 +1815,9 @@ mod tests {
             .unwrap();
         assert_eq!(
             result,
-            UpdateCategoryResult::RenamePreview { affected_entries: 1 }
+            UpdateCategoryResult::RenamePreview {
+                affected_entries: 1
+            }
         );
         assert!(app
             .list_categories()
@@ -1796,14 +1829,20 @@ mod tests {
             .unwrap()
             .iter()
             .any(|c| c.name == "laburo"));
-        assert_eq!(app.get_entry_details(&id).unwrap().summary.category, "trabajo");
+        assert_eq!(
+            app.get_entry_details(&id).unwrap().summary.category,
+            "trabajo"
+        );
 
         // Confirmed rename cascades to the entry.
         let result = app
             .update_category(&update_request("trabajo", "laburo", "#c05640", true))
             .unwrap();
         assert_eq!(result, UpdateCategoryResult::Applied);
-        assert_eq!(app.get_entry_details(&id).unwrap().summary.category, "laburo");
+        assert_eq!(
+            app.get_entry_details(&id).unwrap().summary.category,
+            "laburo"
+        );
     }
 
     #[test]
@@ -1812,7 +1851,10 @@ mod tests {
         let app = unlocked_app();
         app.create_entry(entry_input_for("github", "p", "trabajo"))
             .unwrap();
-        assert_eq!(app.delete_category("trabajo").unwrap_err(), CommandError::CategoryInUse);
+        assert_eq!(
+            app.delete_category("trabajo").unwrap_err(),
+            CommandError::CategoryInUse
+        );
         assert_eq!(
             app.delete_category("ghost").unwrap_err(),
             CommandError::CategoryNotFound
@@ -1823,18 +1865,25 @@ mod tests {
         app.delete_category("entretenimiento").unwrap();
         app.delete_category("estudio").unwrap();
         app.delete_category("servicios").unwrap();
-        assert_eq!(app.delete_category("trabajo").unwrap_err(), CommandError::LastCategory);
+        assert_eq!(
+            app.delete_category("trabajo").unwrap_err(),
+            CommandError::LastCategory
+        );
     }
 
     #[test]
     fn entry_category_validation_accepts_custom_and_rejects_unknown() {
         let app = unlocked_app();
         // An entry referencing a persisted custom category succeeds.
-        app.create_category(&Category::new("lectura", "#8a4f7d")).unwrap();
+        app.create_category(&Category::new("lectura", "#8a4f7d"))
+            .unwrap();
         let id = app
             .create_entry(entry_input_for("bookmarks", "p", "lectura"))
             .unwrap();
-        assert_eq!(app.get_entry_details(&id).unwrap().summary.category, "lectura");
+        assert_eq!(
+            app.get_entry_details(&id).unwrap().summary.category,
+            "lectura"
+        );
 
         // An entry referencing an absent category is rejected (wire-stable
         // InvalidCategory kind for the existing frontend mapping).
@@ -1849,7 +1898,9 @@ mod tests {
     fn update_result_dto_serializes_as_tagged_enum() {
         // The wire shape the frontend switches on (design "Interfaces").
         let preview = serde_json::to_value(UpdateCategoryResultDto::from(
-            UpdateCategoryResult::RenamePreview { affected_entries: 3 },
+            UpdateCategoryResult::RenamePreview {
+                affected_entries: 3,
+            },
         ))
         .unwrap();
         assert_eq!(
@@ -1857,10 +1908,9 @@ mod tests {
             serde_json::json!({ "status": "rename_preview", "affected_entries": 3 })
         );
 
-        let applied = serde_json::to_value(UpdateCategoryResultDto::from(
-            UpdateCategoryResult::Applied,
-        ))
-        .unwrap();
+        let applied =
+            serde_json::to_value(UpdateCategoryResultDto::from(UpdateCategoryResult::Applied))
+                .unwrap();
         assert_eq!(applied, serde_json::json!({ "status": "applied" }));
     }
 }

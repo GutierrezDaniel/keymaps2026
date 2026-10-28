@@ -66,7 +66,9 @@ impl Event {
         match self {
             Event::VaultCreated => r#"{"event":"vault_created"}"#.to_string(),
             Event::UnlockSucceeded => r#"{"event":"unlock_succeeded"}"#.to_string(),
-            Event::UnlockFailed => r#"{"event":"unlock_failed","reason":"authentication_failed"}"#.to_string(),
+            Event::UnlockFailed => {
+                r#"{"event":"unlock_failed","reason":"authentication_failed"}"#.to_string()
+            }
             Event::UnlockBackoff { seconds } => {
                 format!(r#"{{"event":"unlock_backoff","seconds":{seconds}}}"#)
             }

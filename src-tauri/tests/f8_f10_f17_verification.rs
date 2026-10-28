@@ -15,6 +15,7 @@ use tempfile::TempDir;
 use keymaps2026_lib::adapters::backup::BackupService;
 use keymaps2026_lib::adapters::crypto::argon2_aes::Argon2Aes;
 use keymaps2026_lib::adapters::persistence::sqlite::SqliteVaultRepository;
+use keymaps2026_lib::core::application::gate::SessionGate;
 use keymaps2026_lib::core::application::vault_service::{ServiceError, VaultService};
 use keymaps2026_lib::core::domain::entry::{
     EncryptedField, EntryInput, EntryRecord, Filters, RecordId,
@@ -22,7 +23,6 @@ use keymaps2026_lib::core::domain::entry::{
 use keymaps2026_lib::core::ports::cipher::{CipherPort, CryptoError, VaultKey};
 use keymaps2026_lib::core::ports::key_derivation::KeyDerivationPort;
 use keymaps2026_lib::core::ports::vault_repository::VaultRepository;
-use keymaps2026_lib::core::application::gate::SessionGate;
 
 const MASTER_PASSWORD: &str = "hunter2";
 
@@ -35,7 +35,9 @@ fn secret(s: &str) -> SecretString {
 }
 
 fn test_key() -> VaultKey {
-    Argon2Aes.derive(secret(MASTER_PASSWORD), &[7u8; 16]).unwrap()
+    Argon2Aes
+        .derive(secret(MASTER_PASSWORD), &[7u8; 16])
+        .unwrap()
 }
 
 fn validation(key: &VaultKey) -> EncryptedField {
@@ -62,7 +64,7 @@ type Service = VaultService<SqliteVaultRepository, Argon2Aes>;
 /// A file-backed service over an initialized vault plus its derived key.
 fn service(dir: &TempDir) -> (Service, VaultKey) {
     let key = test_key();
-    let repo = SqliteVaultRepository::open(&dir.path().join("vault.db")).unwrap();
+    let repo = SqliteVaultRepository::open(dir.path().join("vault.db")).unwrap();
     repo.init_vault(vec![7u8; 16], &validation(&key)).unwrap();
     (VaultService::new(repo, Argon2Aes), key)
 }
@@ -115,7 +117,8 @@ fn f8_single_entry_reads_and_the_update_guard() {
     let dir = TempDir::new().unwrap();
     let (svc, key) = service(&dir);
     let id = rid(1);
-    svc.create_entry(id, &key, github_input("s3cr3t-pw")).unwrap();
+    svc.create_entry(id, &key, github_input("s3cr3t-pw"))
+        .unwrap();
 
     let details = svc.get_entry_details(&id, &key).unwrap();
     assert_eq!(details.summary.id, id);
@@ -139,7 +142,8 @@ fn f8_single_entry_reads_and_the_update_guard() {
         ServiceError::NotFound
     ));
     assert!(matches!(
-        svc.update_entry(rid(9), &key, github_input("p")).unwrap_err(),
+        svc.update_entry(rid(9), &key, github_input("p"))
+            .unwrap_err(),
         ServiceError::NotFound
     ));
     assert_eq!(
@@ -193,10 +197,7 @@ fn f10_decrypt_keeps_its_error_variants() {
     let id = rid(1);
     let good = Argon2Aes.encrypt(&id, &key, secret("s3cr3t")).unwrap();
     assert_eq!(
-        Argon2Aes
-            .decrypt(&id, &key, &good)
-            .unwrap()
-            .expose_secret(),
+        Argon2Aes.decrypt(&id, &key, &good).unwrap().expose_secret(),
         "s3cr3t"
     );
 
@@ -282,7 +283,7 @@ fn f17_create_and_update_map_every_field_and_bind_the_id() {
     )
     .unwrap();
 
-    let rec = SqliteVaultRepository::open(&dir.path().join("vault.db"))
+    let rec = SqliteVaultRepository::open(dir.path().join("vault.db"))
         .unwrap()
         .get(&id)
         .unwrap()
@@ -318,7 +319,7 @@ fn f17_create_and_update_map_every_field_and_bind_the_id() {
         },
     )
     .unwrap();
-    let updated = SqliteVaultRepository::open(&dir.path().join("vault.db"))
+    let updated = SqliteVaultRepository::open(dir.path().join("vault.db"))
         .unwrap()
         .get(&id)
         .unwrap()
@@ -339,7 +340,7 @@ fn f17_create_and_update_map_every_field_and_bind_the_id() {
     // The entry created on the by-value path survives a backup export intact.
     drop(svc);
     let repo = Arc::new(Mutex::new(
-        SqliteVaultRepository::open(&dir.path().join("vault.db")).unwrap(),
+        SqliteVaultRepository::open(dir.path().join("vault.db")).unwrap(),
     ));
     let dest = dir.path().join("backup.db");
     BackupService::new(Arc::clone(&repo))

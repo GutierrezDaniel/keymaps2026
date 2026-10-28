@@ -214,7 +214,11 @@ fn f1_failed_rename_keeps_original_vault_readable_and_writable() {
 
     assert!(current.exists());
     assert!(format!("{err:?}").contains("rename current to rollback"));
-    assert_eq!(sites(&repo), vec!["alpha".to_string()], "original vault lost");
+    assert_eq!(
+        sites(&repo),
+        vec!["alpha".to_string()],
+        "original vault lost"
+    );
     repo.save(&record(3, "gamma")).unwrap();
     drop(repo);
     let mut got = sites(&SqliteVaultRepository::open(&current).unwrap());
